@@ -24,9 +24,194 @@ async def lifespan(app: FastAPI):
         if database_url.startswith("postgres://"):
             database_url = database_url.replace("postgres://", "postgresql://", 1)
         db_pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
+        
+        # Auto-initialize database if needed
+        async with db_pool.acquire() as conn:
+            # Check if tables exist
+            tables_exist = await conn.fetchval(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'suppliers')"
+            )
+            if not tables_exist:
+                print("Initializing database schema...")
+                await initialize_database(conn)
+                print("Database initialized successfully!")
     yield
     if db_pool:
         await db_pool.close()
+
+async def initialize_database(conn):
+    """Create all tables and seed initial data"""
+    
+    # Enable UUID extension
+    await conn.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
+    
+    # Create tables
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS organizations (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name TEXT NOT NULL,
+            billing_email TEXT,
+            country TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    ''')
+    
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name TEXT NOT NULL UNIQUE,
+            website_url TEXT,
+            country TEXT,
+            is_plate_supplier BOOLEAN NOT NULL DEFAULT FALSE,
+            is_equipment_supplier BOOLEAN NOT NULL DEFAULT FALSE,
+            logo_url TEXT,
+            notes TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    ''')
+    
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS plate_families (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            supplier_id UUID NOT NULL REFERENCES suppliers(id),
+            family_name TEXT NOT NULL,
+            technology_tags TEXT[],
+            process_type TEXT,
+            description TEXT,
+            data_source_url TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    ''')
+    
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS plates (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            plate_family_id UUID NOT NULL REFERENCES plate_families(id),
+            organization_id UUID,
+            sku_code TEXT,
+            display_name TEXT,
+            thickness_mm NUMERIC(5,3) NOT NULL,
+            hardness_shore NUMERIC(5,1),
+            imaging_type TEXT,
+            surface_type TEXT,
+            relief_recommended_mm NUMERIC(5,3),
+            min_lpi INTEGER,
+            max_lpi INTEGER,
+            ink_compatibility TEXT[],
+            substrate_categories TEXT[],
+            applications TEXT[],
+            main_exposure_energy_min_mj_cm2 NUMERIC(7,3),
+            main_exposure_energy_max_mj_cm2 NUMERIC(7,3),
+            back_exposure_energy_min_mj_cm2 NUMERIC(7,3),
+            back_exposure_energy_max_mj_cm2 NUMERIC(7,3),
+            post_exposure_energy_mj_cm2 NUMERIC(7,3),
+            detack_energy_mj_cm2 NUMERIC(7,3),
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            notes TEXT,
+            data_source_url TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    ''')
+    
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS equipment_models (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            supplier_id UUID NOT NULL REFERENCES suppliers(id),
+            model_name TEXT NOT NULL,
+            equipment_type TEXT NOT NULL,
+            technology TEXT,
+            uv_source_type TEXT,
+            nominal_intensity_mw_cm2 NUMERIC(7,2),
+            has_integrated_back_exposure BOOLEAN NOT NULL DEFAULT FALSE,
+            supports_digital_plates BOOLEAN NOT NULL DEFAULT TRUE,
+            supports_analog_plates BOOLEAN NOT NULL DEFAULT TRUE,
+            data_source_url TEXT,
+            notes TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    ''')
+    
+    # Seed suppliers
+    await conn.execute('''
+        INSERT INTO suppliers (name, website_url, country, is_plate_supplier, is_equipment_supplier, notes)
+        VALUES 
+            ('XSYS', 'https://www.xsys.com', 'Germany', TRUE, TRUE, 'nyloflex plates, Catena processing systems'),
+            ('DuPont', 'https://www.dupont.com', 'USA', TRUE, TRUE, 'Cyrel plates and platemaking equipment'),
+            ('Miraclon', 'https://www.miraclon.com', 'USA', TRUE, TRUE, 'FLEXCEL NX plates and systems'),
+            ('Asahi Photoproducts', 'https://www.asahi-photoproducts.com', 'Japan', TRUE, TRUE, 'Water-wash and solvent plates'),
+            ('MacDermid', 'https://www.macdermid.com', 'USA', TRUE, FALSE, 'LUX plates')
+        ON CONFLICT (name) DO NOTHING
+    ''')
+    
+    # Get supplier IDs
+    xsys_id = await conn.fetchval("SELECT id FROM suppliers WHERE name = 'XSYS'")
+    dupont_id = await conn.fetchval("SELECT id FROM suppliers WHERE name = 'DuPont'")
+    miraclon_id = await conn.fetchval("SELECT id FROM suppliers WHERE name = 'Miraclon'")
+    
+    # Seed plate families
+    await conn.execute('''
+        INSERT INTO plate_families (id, supplier_id, family_name, technology_tags, process_type, description)
+        VALUES 
+            (uuid_generate_v4(), $1, 'nyloflex FTF', ARRAY['flat_top_dot', 'digital'], 'solvent', 'Flat-top dot plates for flexible packaging'),
+            (uuid_generate_v4(), $1, 'nyloflex FAH', ARRAY['digital', 'high_durometer'], 'solvent', 'High durometer plates for corrugated'),
+            (uuid_generate_v4(), $1, 'nyloflex ACE', ARRAY['digital', 'thermal'], 'thermal', 'Thermal processing plates'),
+            (uuid_generate_v4(), $2, 'Cyrel EASY', ARRAY['flat_top_dot', 'digital', 'FAST_thermal'], 'thermal', 'FAST thermal plates'),
+            (uuid_generate_v4(), $2, 'Cyrel DFH', ARRAY['digital', 'high_durometer'], 'solvent', 'High durometer solvent plates'),
+            (uuid_generate_v4(), $3, 'FLEXCEL NXH', ARRAY['flat_top_dot', 'digital', 'NX_technology'], 'solvent', 'High-performance NX plates'),
+            (uuid_generate_v4(), $3, 'FLEXCEL NXC', ARRAY['flat_top_dot', 'digital', 'corrugated'], 'solvent', 'NX plates for corrugated')
+        ON CONFLICT DO NOTHING
+    ''', xsys_id, dupont_id, miraclon_id)
+    
+    # Get family IDs
+    ftf_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'nyloflex FTF'")
+    fah_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'nyloflex FAH'")
+    ace_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'nyloflex ACE'")
+    easy_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'Cyrel EASY'")
+    dfh_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'Cyrel DFH'")
+    nxh_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'FLEXCEL NXH'")
+    nxc_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'FLEXCEL NXC'")
+    
+    # Seed plates
+    plates_data = [
+        # XSYS nyloflex FTF
+        (ftf_id, 'FTF-114', 'nyloflex FTF 1.14', 1.14, 69, 'digital', 'flat_top', 133, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 800, 1200, 400, 600),
+        (ftf_id, 'FTF-170', 'nyloflex FTF 1.70', 1.70, 69, 'digital', 'flat_top', 100, 175, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging'], 900, 1400, 450, 700),
+        # XSYS nyloflex FAH
+        (fah_id, 'FAH-284', 'nyloflex FAH 2.84', 2.84, 78, 'digital', 'round_top', 65, 133, ['water', 'solvent'], ['corrugated', 'linerboard'], ['corrugated_postprint'], 1000, 1600, 500, 800),
+        (fah_id, 'FAH-380', 'nyloflex FAH 3.80', 3.80, 78, 'digital', 'round_top', 48, 100, ['water', 'solvent'], ['corrugated'], ['corrugated_postprint'], 1200, 1800, 600, 900),
+        # XSYS nyloflex ACE
+        (ace_id, 'ACE-114', 'nyloflex ACE 1.14', 1.14, 67, 'digital', 'flat_top', 133, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 700, 1100, 350, 550),
+        # DuPont Cyrel EASY
+        (easy_id, 'EASY-114', 'Cyrel EASY 1.14', 1.14, 68, 'digital', 'flat_top', 150, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 750, 1100, 375, 550),
+        (easy_id, 'EASY-170', 'Cyrel EASY 1.70', 1.70, 66, 'digital', 'flat_top', 100, 150, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging'], 900, 1350, 450, 675),
+        # DuPont Cyrel DFH
+        (dfh_id, 'DFH-284', 'Cyrel DFH 2.84', 2.84, 76, 'digital', 'round_top', 65, 120, ['water', 'solvent'], ['corrugated', 'linerboard'], ['corrugated_postprint'], 1100, 1700, 550, 850),
+        (dfh_id, 'DFH-380', 'Cyrel DFH 3.80', 3.80, 76, 'digital', 'round_top', 48, 85, ['water', 'solvent'], ['corrugated'], ['corrugated_postprint'], 1300, 1900, 650, 950),
+        # Miraclon FLEXCEL NXH
+        (nxh_id, 'NXH-114', 'FLEXCEL NXH 1.14', 1.14, 70, 'digital', 'flat_top', 150, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 700, 1050, 350, 525),
+        (nxh_id, 'NXH-170', 'FLEXCEL NXH 1.70', 1.70, 70, 'digital', 'flat_top', 120, 175, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging'], 800, 1200, 400, 600),
+        # Miraclon FLEXCEL NXC
+        (nxc_id, 'NXC-284', 'FLEXCEL NXC 2.84', 2.84, 72, 'digital', 'flat_top', 85, 150, ['water', 'solvent'], ['corrugated', 'linerboard'], ['corrugated_preprint', 'corrugated_postprint'], 950, 1450, 475, 725),
+        (nxc_id, 'NXC-380', 'FLEXCEL NXC 3.80', 3.80, 72, 'digital', 'flat_top', 65, 120, ['water', 'solvent'], ['corrugated'], ['corrugated_postprint'], 1100, 1650, 550, 825),
+    ]
+    
+    for plate in plates_data:
+        await conn.execute('''
+            INSERT INTO plates (plate_family_id, sku_code, display_name, thickness_mm, hardness_shore, 
+                              imaging_type, surface_type, min_lpi, max_lpi, ink_compatibility, 
+                              substrate_categories, applications, main_exposure_energy_min_mj_cm2,
+                              main_exposure_energy_max_mj_cm2, back_exposure_energy_min_mj_cm2,
+                              back_exposure_energy_max_mj_cm2)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            ON CONFLICT DO NOTHING
+        ''', *plate)
+    
+    print(f"Seeded {len(plates_data)} plates")
 
 app = FastAPI(
     title="FlexoPlate IQ API",
