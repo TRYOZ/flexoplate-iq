@@ -123,7 +123,7 @@ export default function PlatesPage() {
   }, []);
   
   // Get unique thicknesses
-  const thicknesses = [...new Set(plates.map(p => p.thickness_mm))].sort((a, b) => a - b);
+const thicknesses = Array.from(new Set(plates.map(p => p.thickness_mm))).sort((a, b) => a - b);
   
   // Filter plates
   const filteredPlates = plates.filter(plate => {
