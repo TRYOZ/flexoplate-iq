@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-rgb: 249, 250, 251;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-rgb));
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+/* Score badge colors */
+.score-excellent {
+  @apply bg-green-100 text-green-800 border-green-200;
+}
+
+.score-good {
+  @apply bg-blue-100 text-blue-800 border-blue-200;
+}
+
+.score-fair {
+  @apply bg-yellow-100 text-yellow-800 border-yellow-200;
+}
+
+.score-poor {
+  @apply bg-red-100 text-red-800 border-red-200;
+}

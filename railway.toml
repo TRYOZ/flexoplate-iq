@@ -1,0 +1,10 @@
+# Railway Project Configuration
+# This file tells Railway how to deploy the project
+
+[build]
+# No root build command - each service builds separately
+
+[deploy]
+# No root deploy - handled by services
+
+# Service definitions are in railway.json
