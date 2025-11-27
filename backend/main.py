@@ -7,12 +7,23 @@ from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List
+from decimal import Decimal
 import os
 import asyncpg
 from contextlib import asynccontextmanager
 
 # Database connection pool
 db_pool = None
+
+
+def to_float(value) -> float:
+    """Safely convert Decimal or any numeric to float"""
+    if value is None:
+        return 0.0
+    if isinstance(value, Decimal):
+        return float(value)
+    return float(value)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -38,6 +49,7 @@ async def lifespan(app: FastAPI):
     yield
     if db_pool:
         await db_pool.close()
+
 
 async def initialize_database(conn):
     """Create all tables and seed initial data"""
@@ -162,6 +174,7 @@ async def initialize_database(conn):
             (uuid_generate_v4(), $1, 'nyloflex ACE', ARRAY['digital', 'thermal'], 'thermal', 'Thermal processing plates'),
             (uuid_generate_v4(), $2, 'Cyrel EASY', ARRAY['flat_top_dot', 'digital', 'FAST_thermal'], 'thermal', 'FAST thermal plates'),
             (uuid_generate_v4(), $2, 'Cyrel DFH', ARRAY['digital', 'high_durometer'], 'solvent', 'High durometer solvent plates'),
+            (uuid_generate_v4(), $2, 'Cyrel DSP', ARRAY['flat_top_dot', 'digital'], 'solvent', 'Digital solvent plates for flexible packaging'),
             (uuid_generate_v4(), $3, 'FLEXCEL NXH', ARRAY['flat_top_dot', 'digital', 'NX_technology'], 'solvent', 'High-performance NX plates'),
             (uuid_generate_v4(), $3, 'FLEXCEL NXC', ARRAY['flat_top_dot', 'digital', 'corrugated'], 'solvent', 'NX plates for corrugated')
         ON CONFLICT DO NOTHING
@@ -173,45 +186,51 @@ async def initialize_database(conn):
     ace_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'nyloflex ACE'")
     easy_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'Cyrel EASY'")
     dfh_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'Cyrel DFH'")
+    dsp_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'Cyrel DSP'")
     nxh_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'FLEXCEL NXH'")
     nxc_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'FLEXCEL NXC'")
     
-    # Seed plates
+    # Seed plates - now with matching solvent plates across suppliers
     plates_data = [
-        # XSYS nyloflex FTF
+        # XSYS nyloflex FTF (solvent)
         (ftf_id, 'FTF-114', 'nyloflex FTF 1.14', 1.14, 69, 'digital', 'flat_top', 133, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 800, 1200, 400, 600),
         (ftf_id, 'FTF-170', 'nyloflex FTF 1.70', 1.70, 69, 'digital', 'flat_top', 100, 175, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging'], 900, 1400, 450, 700),
-        # XSYS nyloflex FAH
+        # XSYS nyloflex FAH (solvent - corrugated)
         (fah_id, 'FAH-284', 'nyloflex FAH 2.84', 2.84, 78, 'digital', 'round_top', 65, 133, ['water', 'solvent'], ['corrugated', 'linerboard'], ['corrugated_postprint'], 1000, 1600, 500, 800),
         (fah_id, 'FAH-380', 'nyloflex FAH 3.80', 3.80, 78, 'digital', 'round_top', 48, 100, ['water', 'solvent'], ['corrugated'], ['corrugated_postprint'], 1200, 1800, 600, 900),
-        # XSYS nyloflex ACE
+        # XSYS nyloflex ACE (thermal)
         (ace_id, 'ACE-114', 'nyloflex ACE 1.14', 1.14, 67, 'digital', 'flat_top', 133, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 700, 1100, 350, 550),
-        # DuPont Cyrel EASY
+        # DuPont Cyrel EASY (thermal)
         (easy_id, 'EASY-114', 'Cyrel EASY 1.14', 1.14, 68, 'digital', 'flat_top', 150, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 750, 1100, 375, 550),
         (easy_id, 'EASY-170', 'Cyrel EASY 1.70', 1.70, 66, 'digital', 'flat_top', 100, 150, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging'], 900, 1350, 450, 675),
-        # DuPont Cyrel DFH
+        # DuPont Cyrel DFH (solvent - corrugated)
         (dfh_id, 'DFH-284', 'Cyrel DFH 2.84', 2.84, 76, 'digital', 'round_top', 65, 120, ['water', 'solvent'], ['corrugated', 'linerboard'], ['corrugated_postprint'], 1100, 1700, 550, 850),
         (dfh_id, 'DFH-380', 'Cyrel DFH 3.80', 3.80, 76, 'digital', 'round_top', 48, 85, ['water', 'solvent'], ['corrugated'], ['corrugated_postprint'], 1300, 1900, 650, 950),
-        # Miraclon FLEXCEL NXH
+        # DuPont Cyrel DSP (solvent - flexible packaging) - NEW! Matches nyloflex FTF
+        (dsp_id, 'DSP-114', 'Cyrel DSP 1.14', 1.14, 70, 'digital', 'flat_top', 133, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 780, 1180, 390, 590),
+        (dsp_id, 'DSP-170', 'Cyrel DSP 1.70', 1.70, 68, 'digital', 'flat_top', 100, 175, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging'], 880, 1380, 440, 690),
+        # Miraclon FLEXCEL NXH (solvent - flexible packaging)
         (nxh_id, 'NXH-114', 'FLEXCEL NXH 1.14', 1.14, 70, 'digital', 'flat_top', 150, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 700, 1050, 350, 525),
         (nxh_id, 'NXH-170', 'FLEXCEL NXH 1.70', 1.70, 70, 'digital', 'flat_top', 120, 175, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging'], 800, 1200, 400, 600),
-        # Miraclon FLEXCEL NXC
+        # Miraclon FLEXCEL NXC (solvent - corrugated)
         (nxc_id, 'NXC-284', 'FLEXCEL NXC 2.84', 2.84, 72, 'digital', 'flat_top', 85, 150, ['water', 'solvent'], ['corrugated', 'linerboard'], ['corrugated_preprint', 'corrugated_postprint'], 950, 1450, 475, 725),
         (nxc_id, 'NXC-380', 'FLEXCEL NXC 3.80', 3.80, 72, 'digital', 'flat_top', 65, 120, ['water', 'solvent'], ['corrugated'], ['corrugated_postprint'], 1100, 1650, 550, 825),
     ]
     
     for plate in plates_data:
-        await conn.execute('''
-            INSERT INTO plates (plate_family_id, sku_code, display_name, thickness_mm, hardness_shore, 
-                              imaging_type, surface_type, min_lpi, max_lpi, ink_compatibility, 
-                              substrate_categories, applications, main_exposure_energy_min_mj_cm2,
-                              main_exposure_energy_max_mj_cm2, back_exposure_energy_min_mj_cm2,
-                              back_exposure_energy_max_mj_cm2)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-            ON CONFLICT DO NOTHING
-        ''', *plate)
+        if plate[0] is not None:  # Only insert if family exists
+            await conn.execute('''
+                INSERT INTO plates (plate_family_id, sku_code, display_name, thickness_mm, hardness_shore, 
+                                  imaging_type, surface_type, min_lpi, max_lpi, ink_compatibility, 
+                                  substrate_categories, applications, main_exposure_energy_min_mj_cm2,
+                                  main_exposure_energy_max_mj_cm2, back_exposure_energy_min_mj_cm2,
+                                  back_exposure_energy_max_mj_cm2)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                ON CONFLICT DO NOTHING
+            ''', *plate)
     
     print(f"Seeded {len(plates_data)} plates")
+
 
 app = FastAPI(
     title="FlexoPlate IQ API",
@@ -256,7 +275,7 @@ class PlateEquivalent(PlateBase):
 
 class EquivalencyRequest(BaseModel):
     source_plate_id: str
-    target_supplier: Optional[str] = None  # None = search all suppliers
+    target_supplier: Optional[str] = None
     substrate: Optional[str] = None
     ink_system: Optional[str] = None
     application: Optional[str] = None
@@ -278,27 +297,6 @@ class ExposureCalculation(BaseModel):
     current_intensity_mw_cm2: float
     target_floor_mm: Optional[float] = None
 
-class ExposureResult(BaseModel):
-    back_exposure_time_s: Optional[float]
-    back_exposure_range: Optional[tuple]
-    main_exposure_time_s: Optional[float]
-    main_exposure_range: Optional[tuple]
-    post_exposure_time_s: Optional[float]
-    detack_time_s: Optional[float]
-    notes: List[str]
-
-class RecipeCard(BaseModel):
-    plate_name: str
-    plate_thickness_mm: float
-    supplier_name: str
-    equipment_name: Optional[str]
-    back_exposure_s: float
-    main_exposure_s: float
-    post_exposure_s: Optional[float]
-    detack_s: Optional[float]
-    target_floor_mm: Optional[float]
-    notes: str
-
 # ============================================================================
 # DATABASE HELPERS
 # ============================================================================
@@ -314,10 +312,12 @@ async def get_db():
 # PLATE MATCHING ALGORITHM
 # ============================================================================
 
-def calculate_range_overlap(min1: int, max1: int, min2: int, max2: int) -> float:
+def calculate_range_overlap(min1, max1, min2, max2) -> float:
     """Calculate overlap ratio between two ranges (0.0 to 1.0)"""
     if min1 is None or max1 is None or min2 is None or max2 is None:
         return 0.5  # Neutral if data missing
+    
+    min1, max1, min2, max2 = float(min1), float(max1), float(min2), float(max2)
     
     overlap_start = max(min1, min2)
     overlap_end = min(max1, max2)
@@ -346,7 +346,7 @@ def calculate_plate_similarity(
     target: dict, 
     weights: EquivalencyWeights,
     context: dict = None
-) -> tuple[int, List[str]]:
+) -> tuple:
     """
     Calculate similarity score between two plates.
     Returns (score 0-100, list of notes)
@@ -361,7 +361,10 @@ def calculate_plate_similarity(
         return 0, ["Process type mismatch - not compatible"]
     
     # 2. Thickness must be within tolerance
-    thickness_diff = abs((source.get('thickness_mm') or 0) - (target.get('thickness_mm') or 0))
+    source_thickness = to_float(source.get('thickness_mm'))
+    target_thickness = to_float(target.get('thickness_mm'))
+    thickness_diff = abs(source_thickness - target_thickness)
+    
     if thickness_diff > weights.thickness_tolerance_mm:
         return 0, [f"Thickness difference ({thickness_diff:.2f}mm) exceeds tolerance"]
     
@@ -381,13 +384,16 @@ def calculate_plate_similarity(
     # Hardness similarity
     source_hardness = source.get('hardness_shore')
     target_hardness = target.get('hardness_shore')
-   if source_hardness and target_hardness:
-        hardness_diff = abs(float(source_hardness) - float(target_hardness))
+    if source_hardness and target_hardness:
+        source_h = to_float(source_hardness)
+        target_h = to_float(target_hardness)
+        hardness_diff = abs(source_h - target_h)
+        
         if hardness_diff <= weights.hardness_tolerance:
-            hardness_score = weights.hardness * (1 - float(hardness_diff) / float(weights.hardness_tolerance))
+            hardness_score = weights.hardness * (1 - hardness_diff / weights.hardness_tolerance)
             score += hardness_score
             if hardness_diff > 1:
-                notes.append(f"Slightly {'harder' if target_hardness > source_hardness else 'softer'} ({hardness_diff:.0f} Shore difference)")
+                notes.append(f"Slightly {'harder' if target_h > source_h else 'softer'} ({hardness_diff:.0f} Shore difference)")
         else:
             notes.append(f"Significant hardness difference ({hardness_diff:.0f} Shore) - may affect ink transfer")
     else:
@@ -533,7 +539,7 @@ async def list_plates(
         JOIN plate_families pf ON p.plate_family_id = pf.id
         JOIN suppliers s ON pf.supplier_id = s.id
         WHERE p.is_active = TRUE
-          AND p.organization_id IS NULL  -- Global catalog only
+          AND p.organization_id IS NULL
           AND ($1::text IS NULL OR s.name ILIKE $1)
           AND ($2::text IS NULL OR pf.family_name ILIKE $2)
           AND ($3::numeric IS NULL OR p.thickness_mm = $3)
@@ -634,7 +640,7 @@ async def find_equivalents(
     
     source = dict(source_row)
     
-    # Get candidate plates (different from source, matching basic criteria)
+    # Get candidate plates (different supplier, same process type, close thickness)
     candidates_query = """
         SELECT 
             p.id::text,
@@ -658,10 +664,10 @@ async def find_equivalents(
         WHERE p.is_active = TRUE
           AND p.organization_id IS NULL
           AND p.id != $1::uuid
-          AND s.name != $2  -- Different supplier (or same if needed)
-          AND pf.process_type = $3  -- Same process type
-          AND ABS(p.thickness_mm - $4) <= 0.1  -- Close thickness
-          AND ($5::text IS NULL OR s.name ILIKE $5)  -- Optional target supplier filter
+          AND s.name != $2
+          AND pf.process_type = $3
+          AND ABS(p.thickness_mm - $4) <= 0.1
+          AND ($5::text IS NULL OR s.name ILIKE $5)
         ORDER BY ABS(p.thickness_mm - $4), s.name
         LIMIT 50
     """
@@ -670,7 +676,7 @@ async def find_equivalents(
         request.source_plate_id,
         source['supplier_name'],
         source['process_type'],
-        source['thickness_mm'],
+        to_float(source['thickness_mm']),
         request.target_supplier
     )
     
@@ -699,7 +705,7 @@ async def find_equivalents(
     
     return {
         'source_plate': source,
-        'equivalents': results[:10],  # Top 10 matches
+        'equivalents': results[:10],
         'total_candidates': len(results)
     }
 
@@ -760,26 +766,33 @@ async def calculate_exposure(
     # Main exposure
     main_time = None
     main_range = None
-  if plate.get('main_exposure_energy_min_mj_cm2') and plate.get('main_exposure_energy_max_mj_cm2'):
-        main_min = float(plate['main_exposure_energy_min_mj_cm2']) / intensity
-        main_max = float(plate['main_exposure_energy_max_mj_cm2']) / intensity
+    main_min_energy = plate.get('main_exposure_energy_min_mj_cm2')
+    main_max_energy = plate.get('main_exposure_energy_max_mj_cm2')
+    
+    if main_min_energy and main_max_energy:
+        main_min = to_float(main_min_energy) / intensity
+        main_max = to_float(main_max_energy) / intensity
         main_time = (main_min + main_max) / 2  # Midpoint recommendation
         main_range = (round(main_min, 1), round(main_max, 1))
-        notes.append(f"Main exposure based on {plate['main_exposure_energy_min_mj_cm2']}-{plate['main_exposure_energy_max_mj_cm2']} mJ/cm²")
+        notes.append(f"Main exposure based on {to_float(main_min_energy):.0f}-{to_float(main_max_energy):.0f} mJ/cm²")
     
     # Back exposure
     back_time = None
     back_range = None
-    if plate.get('back_exposure_energy_min_mj_cm2') and plate.get('back_exposure_energy_max_mj_cm2'):
-        back_min = plate['back_exposure_energy_min_mj_cm2'] / intensity
-        back_max = plate['back_exposure_energy_max_mj_cm2'] / intensity
+    back_min_energy = plate.get('back_exposure_energy_min_mj_cm2')
+    back_max_energy = plate.get('back_exposure_energy_max_mj_cm2')
+    
+    if back_min_energy and back_max_energy:
+        back_min = to_float(back_min_energy) / intensity
+        back_max = to_float(back_max_energy) / intensity
         back_time = (back_min + back_max) / 2
         back_range = (round(back_min, 1), round(back_max, 1))
         
         # Adjust for target floor if specified
         if request.target_floor_mm and plate.get('thickness_mm'):
-            target_relief = plate['thickness_mm'] - request.target_floor_mm
-            recommended_relief = plate.get('relief_recommended_mm') or (plate['thickness_mm'] * 0.6)
+            plate_thickness = to_float(plate['thickness_mm'])
+            target_relief = plate_thickness - request.target_floor_mm
+            recommended_relief = to_float(plate.get('relief_recommended_mm') or (plate_thickness * 0.6))
             if target_relief < recommended_relief:
                 # More floor = more back exposure
                 adjustment = 1 + (recommended_relief - target_relief) / recommended_relief * 0.2
@@ -789,12 +802,12 @@ async def calculate_exposure(
     # Post exposure
     post_time = None
     if plate.get('post_exposure_energy_mj_cm2'):
-        post_time = round(plate['post_exposure_energy_mj_cm2'] / intensity, 1)
+        post_time = round(to_float(plate['post_exposure_energy_mj_cm2']) / intensity, 1)
     
     # Detack
     detack_time = None
     if plate.get('detack_energy_mj_cm2'):
-        detack_time = round(plate['detack_energy_mj_cm2'] / intensity, 1)
+        detack_time = round(to_float(plate['detack_energy_mj_cm2']) / intensity, 1)
     
     # Add general notes
     notes.append(f"Calculated at {intensity} mW/cm² measured intensity")
@@ -804,7 +817,7 @@ async def calculate_exposure(
     return {
         'plate': {
             'name': plate.get('display_name') or plate.get('family_name'),
-            'thickness_mm': plate['thickness_mm'],
+            'thickness_mm': to_float(plate['thickness_mm']),
             'supplier': plate['supplier_name'],
             'process_type': plate['process_type']
         },
@@ -845,7 +858,7 @@ async def scale_exposure_time(
     }
 
 # ----------------------------------------------------------------------------
-# EQUIPMENT (for future use)
+# EQUIPMENT
 # ----------------------------------------------------------------------------
 
 @app.get("/api/equipment/models")
