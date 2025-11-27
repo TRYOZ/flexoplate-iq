@@ -381,10 +381,10 @@ def calculate_plate_similarity(
     # Hardness similarity
     source_hardness = source.get('hardness_shore')
     target_hardness = target.get('hardness_shore')
-    if source_hardness and target_hardness:
-        hardness_diff = abs(source_hardness - target_hardness)
+   if source_hardness and target_hardness:
+        hardness_diff = abs(float(source_hardness) - float(target_hardness))
         if hardness_diff <= weights.hardness_tolerance:
-            hardness_score = weights.hardness * (1 - hardness_diff / weights.hardness_tolerance)
+            hardness_score = weights.hardness * (1 - float(hardness_diff) / float(weights.hardness_tolerance))
             score += hardness_score
             if hardness_diff > 1:
                 notes.append(f"Slightly {'harder' if target_hardness > source_hardness else 'softer'} ({hardness_diff:.0f} Shore difference)")
@@ -760,9 +760,9 @@ async def calculate_exposure(
     # Main exposure
     main_time = None
     main_range = None
-    if plate.get('main_exposure_energy_min_mj_cm2') and plate.get('main_exposure_energy_max_mj_cm2'):
-        main_min = plate['main_exposure_energy_min_mj_cm2'] / intensity
-        main_max = plate['main_exposure_energy_max_mj_cm2'] / intensity
+  if plate.get('main_exposure_energy_min_mj_cm2') and plate.get('main_exposure_energy_max_mj_cm2'):
+        main_min = float(plate['main_exposure_energy_min_mj_cm2']) / intensity
+        main_max = float(plate['main_exposure_energy_max_mj_cm2']) / intensity
         main_time = (main_min + main_max) / 2  # Midpoint recommendation
         main_range = (round(main_min, 1), round(main_max, 1))
         notes.append(f"Main exposure based on {plate['main_exposure_energy_min_mj_cm2']}-{plate['main_exposure_energy_max_mj_cm2']} mJ/cm²")
