@@ -1,370 +1,574 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Calculator, Clock, Sun, Zap, RefreshCw, AlertTriangle, Printer } from 'lucide-react';
-import { api, Plate, ExposureResult } from '@/lib/api';
 
-function ExposureCard({ 
-  label, 
-  time, 
-  range, 
-  icon: Icon 
-}: { 
-  label: string; 
-  time: number | null; 
-  range?: [number, number] | null;
-  icon: React.ElementType;
-}) {
-  if (time === null) return null;
-  
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
-          <Icon className="w-4 h-4 text-blue-600" />
-        </div>
-        <span className="font-medium text-gray-700">{label}</span>
-      </div>
-      
-      <div className="text-3xl font-bold text-gray-900 mb-1">
-        {formatTime(time)}
-      </div>
-      
-      {range && (
-        <p className="text-sm text-gray-500">
-          Range: {formatTime(range[0])} – {formatTime(range[1])}
-        </p>
-      )}
-    </div>
-  );
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
+
+interface Plate {
+  id: string;
+  display_name: string;
+  family_name: string;
+  supplier_name: string;
+  thickness_mm: number;
+  process_type: string;
+  main_exposure_energy_min_mj_cm2?: number;
+  main_exposure_energy_max_mj_cm2?: number;
+  back_exposure_energy_min_mj_cm2?: number;
+  back_exposure_energy_max_mj_cm2?: number;
 }
 
-function formatTime(seconds: number): string {
-  if (seconds < 60) {
-    return `${seconds.toFixed(1)}s`;
-  }
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  if (secs === 0) {
-    return `${mins} min`;
-  }
-  return `${mins}m ${secs.toFixed(0)}s`;
+interface Equipment {
+  id: string;
+  model_name: string;
+  supplier_name: string;
+  uv_source_type: string;
+  nominal_intensity_mw_cm2: number;
+  notes?: string;
 }
 
-function RecipeCardPrintable({ result }: { result: ExposureResult }) {
-  const now = new Date().toLocaleString();
-  
-  return (
-    <div className="bg-white border-2 border-gray-300 rounded-lg p-6 print:border-black">
-      <div className="flex justify-between items-start border-b border-gray-200 pb-4 mb-4">
-        <div>
-          <h2 className="text-xl font-bold text-gray-900">Exposure Recipe Card</h2>
-          <p className="text-sm text-gray-500">Generated: {now}</p>
-        </div>
-        <div className="text-right">
-          <p className="font-semibold text-gray-900">FlexoPlate IQ</p>
-        </div>
-      </div>
-      
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <div>
-          <p className="text-sm text-gray-500">Plate</p>
-          <p className="font-semibold">{result.plate.name}</p>
-        </div>
-        <div>
-          <p className="text-sm text-gray-500">Supplier</p>
-          <p className="font-semibold">{result.plate.supplier}</p>
-        </div>
-        <div>
-          <p className="text-sm text-gray-500">Thickness</p>
-          <p className="font-semibold">{result.plate.thickness_mm} mm</p>
-        </div>
-        <div>
-          <p className="text-sm text-gray-500">Process</p>
-          <p className="font-semibold capitalize">{result.plate.process_type}</p>
-        </div>
-      </div>
-      
-      <div className="bg-gray-50 rounded-lg p-4 mb-6">
-        <p className="text-sm text-gray-500 mb-2">UV Intensity Used</p>
-        <p className="text-2xl font-bold text-blue-600">
-          {result.input.intensity_mw_cm2} mW/cm²
-        </p>
-      </div>
-      
-      <table className="w-full border-collapse mb-6">
-        <thead>
-          <tr className="border-b-2 border-gray-300">
-            <th className="text-left py-2 font-semibold">Step</th>
-            <th className="text-right py-2 font-semibold">Time</th>
-            <th className="text-right py-2 font-semibold">Range</th>
-          </tr>
-        </thead>
-        <tbody>
-          {result.exposure.back_exposure_time_s && (
-            <tr className="border-b border-gray-200">
-              <td className="py-2">Back Exposure</td>
-              <td className="text-right font-mono font-semibold">
-                {formatTime(result.exposure.back_exposure_time_s)}
-              </td>
-              <td className="text-right text-sm text-gray-500">
-                {result.exposure.back_exposure_range_s 
-                  ? `${formatTime(result.exposure.back_exposure_range_s[0])} – ${formatTime(result.exposure.back_exposure_range_s[1])}`
-                  : '—'}
-              </td>
-            </tr>
-          )}
-          {result.exposure.main_exposure_time_s && (
-            <tr className="border-b border-gray-200">
-              <td className="py-2">Main Exposure</td>
-              <td className="text-right font-mono font-semibold">
-                {formatTime(result.exposure.main_exposure_time_s)}
-              </td>
-              <td className="text-right text-sm text-gray-500">
-                {result.exposure.main_exposure_range_s 
-                  ? `${formatTime(result.exposure.main_exposure_range_s[0])} – ${formatTime(result.exposure.main_exposure_range_s[1])}`
-                  : '—'}
-              </td>
-            </tr>
-          )}
-          {result.exposure.post_exposure_time_s && (
-            <tr className="border-b border-gray-200">
-              <td className="py-2">Post Exposure</td>
-              <td className="text-right font-mono font-semibold">
-                {formatTime(result.exposure.post_exposure_time_s)}
-              </td>
-              <td className="text-right text-sm text-gray-500">—</td>
-            </tr>
-          )}
-          {result.exposure.detack_time_s && (
-            <tr className="border-b border-gray-200">
-              <td className="py-2">Detack</td>
-              <td className="text-right font-mono font-semibold">
-                {formatTime(result.exposure.detack_time_s)}
-              </td>
-              <td className="text-right text-sm text-gray-500">—</td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-      
-      {result.notes.length > 0 && (
-        <div className="border-t border-gray-200 pt-4">
-          <p className="text-sm font-semibold text-gray-700 mb-2">Notes</p>
-          <ul className="text-sm text-gray-600 space-y-1">
-            {result.notes.map((note, i) => (
-              <li key={i}>• {note}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
+interface ExposureResult {
+  plate: {
+    name: string;
+    thickness_mm: number;
+    supplier: string;
+    process_type: string;
+  };
+  exposure: {
+    main_exposure_time_s?: number;
+    main_exposure_range_s?: [number, number];
+    back_exposure_time_s?: number;
+    back_exposure_range_s?: [number, number];
+    post_exposure_time_s?: number;
+    detack_time_s?: number;
+  };
+  notes: string[];
+  method?: string;
+  reference?: {
+    plate: string;
+    main_time: string;
+    back_time: string;
+  };
+  equipment?: Equipment;
+  effective_intensity?: number;
+  lamp_age_months?: number;
 }
 
 export default function ExposurePage() {
+  // State
   const [plates, setPlates] = useState<Plate[]>([]);
-  const [selectedPlateId, setSelectedPlateId] = useState('');
-  const [intensity, setIntensity] = useState<string>('18');
-  const [targetFloor, setTargetFloor] = useState<string>('');
+  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [selectedPlate, setSelectedPlate] = useState('');
+  const [calculationMethod, setCalculationMethod] = useState<'equipment' | 'reference' | 'intensity'>('equipment');
+  const [selectedEquipment, setSelectedEquipment] = useState('');
+  const [lampAgeMonths, setLampAgeMonths] = useState(0);
+  const [manualIntensity, setManualIntensity] = useState('');
+  const [targetFloor, setTargetFloor] = useState('');
+  
+  // Reference time method
+  const [referencePlate, setReferencePlate] = useState('');
+  const [referenceMainTime, setReferenceMainTime] = useState('');
+  const [referenceBackTime, setReferenceBackTime] = useState('');
+  
+  // Results
   const [result, setResult] = useState<ExposureResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  
-  // Load plates
+  const [error, setError] = useState('');
+
+  // Load plates and equipment on mount
   useEffect(() => {
-    async function loadPlates() {
-      try {
-        const data = await api.getPlates({ limit: 100 });
-        setPlates(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load plates');
-      } finally {
-        setInitialLoading(false);
-      }
-    }
-    loadPlates();
+    fetchPlates();
+    fetchEquipment();
   }, []);
-  
-  async function calculate() {
-    if (!selectedPlateId || !intensity) return;
+
+  const fetchPlates = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/plates?limit=200`);
+      const data = await res.json();
+      setPlates(data);
+    } catch (err) {
+      console.error('Failed to fetch plates:', err);
+    }
+  };
+
+  const fetchEquipment = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/equipment/models`);
+      const data = await res.json();
+      setEquipment(data);
+    } catch (err) {
+      console.error('Failed to fetch equipment:', err);
+    }
+  };
+
+  // Get selected equipment details
+  const selectedEquipmentDetails = equipment.find(e => e.id === selectedEquipment);
+
+  // Calculate effective intensity based on equipment and lamp age
+  const getEffectiveIntensity = (): number => {
+    if (calculationMethod === 'intensity' && manualIntensity) {
+      return parseFloat(manualIntensity);
+    }
     
+    if (calculationMethod === 'equipment' && selectedEquipmentDetails) {
+      const nominalIntensity = selectedEquipmentDetails.nominal_intensity_mw_cm2 || 18;
+      // LED degrades ~5% per year, tubes ~30% per year
+      const isLED = selectedEquipmentDetails.uv_source_type?.includes('LED');
+      const degradationRate = isLED ? 0.05 : 0.30;
+      const degradation = 1 - (degradationRate * (lampAgeMonths / 12));
+      return nominalIntensity * Math.max(0.5, degradation);
+    }
+    
+    return 18; // Default fallback
+  };
+
+  // Calculate using reference time method
+  const calculateFromReference = (): ExposureResult | null => {
+    if (!referencePlate || !selectedPlate || !referenceMainTime) {
+      setError('Please fill in reference plate, target plate, and reference main time');
+      return null;
+    }
+    
+    const refPlate = plates.find(p => p.id === referencePlate);
+    const targetPlate = plates.find(p => p.id === selectedPlate);
+    
+    if (!refPlate || !targetPlate) return null;
+    
+    // Get energy requirements for both plates
+    const refMainEnergy = ((refPlate.main_exposure_energy_min_mj_cm2 || 0) + 
+                          (refPlate.main_exposure_energy_max_mj_cm2 || 0)) / 2 || 1000;
+    const refBackEnergy = ((refPlate.back_exposure_energy_min_mj_cm2 || 0) + 
+                          (refPlate.back_exposure_energy_max_mj_cm2 || 0)) / 2 || 500;
+    
+    const targetMainEnergy = ((targetPlate.main_exposure_energy_min_mj_cm2 || 0) + 
+                              (targetPlate.main_exposure_energy_max_mj_cm2 || 0)) / 2 || 1000;
+    const targetBackEnergy = ((targetPlate.back_exposure_energy_min_mj_cm2 || 0) + 
+                              (targetPlate.back_exposure_energy_max_mj_cm2 || 0)) / 2 || 500;
+    
+    // Calculate scaled times
+    const mainRatio = targetMainEnergy / refMainEnergy;
+    const backRatio = targetBackEnergy / refBackEnergy;
+    
+    const scaledMainTime = parseFloat(referenceMainTime) * mainRatio;
+    const scaledBackTime = referenceBackTime ? parseFloat(referenceBackTime) * backRatio : null;
+    
+    return {
+      plate: {
+        name: targetPlate.display_name || targetPlate.family_name,
+        thickness_mm: targetPlate.thickness_mm,
+        supplier: targetPlate.supplier_name,
+        process_type: targetPlate.process_type
+      },
+      exposure: {
+        main_exposure_time_s: Math.round(scaledMainTime),
+        back_exposure_time_s: scaledBackTime ? Math.round(scaledBackTime) : undefined,
+        main_exposure_range_s: [Math.round(scaledMainTime * 0.9), Math.round(scaledMainTime * 1.1)],
+        back_exposure_range_s: scaledBackTime ? [Math.round(scaledBackTime * 0.9), Math.round(scaledBackTime * 1.1)] : undefined
+      },
+      notes: [
+        `Scaled from ${refPlate.display_name || refPlate.family_name} reference times`,
+        `Energy ratio (main): ${mainRatio.toFixed(2)}x`,
+        scaledBackTime ? `Energy ratio (back): ${backRatio.toFixed(2)}x` : '',
+        'Fine-tune based on actual results'
+      ].filter(Boolean),
+      method: 'reference',
+      reference: {
+        plate: refPlate.display_name || refPlate.family_name,
+        main_time: referenceMainTime,
+        back_time: referenceBackTime
+      }
+    };
+  };
+
+  // Main calculation handler
+  const handleCalculate = async () => {
+    setError('');
     setLoading(true);
-    setError(null);
     
     try {
-      const result = await api.calculateExposure({
-        plate_id: selectedPlateId,
-        current_intensity_mw_cm2: parseFloat(intensity),
-        target_floor_mm: targetFloor ? parseFloat(targetFloor) : undefined
+      if (calculationMethod === 'reference') {
+        const refResult = calculateFromReference();
+        if (refResult) {
+          setResult(refResult);
+        }
+        setLoading(false);
+        return;
+      }
+      
+      // Equipment or intensity method - use API
+      const intensity = getEffectiveIntensity();
+      
+      if (!selectedPlate) {
+        setError('Please select a plate');
+        setLoading(false);
+        return;
+      }
+      
+      const res = await fetch(`${API_BASE}/api/exposure/calculate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plate_id: selectedPlate,
+          current_intensity_mw_cm2: intensity,
+          target_floor_mm: targetFloor ? parseFloat(targetFloor) : null
+        })
       });
-      setResult(result);
+      
+      const data = await res.json();
+      
+      // Add equipment info to result
+      if (calculationMethod === 'equipment' && selectedEquipmentDetails) {
+        data.equipment = selectedEquipmentDetails;
+        data.effective_intensity = intensity;
+        data.lamp_age_months = lampAgeMonths;
+      }
+      
+      setResult(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Calculation failed');
-    } finally {
-      setLoading(false);
+      setError('Calculation failed. Please try again.');
+      console.error(err);
     }
-  }
-  
-  function handlePrint() {
-    window.print();
-  }
-  
-  if (initialLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
-      </div>
-    );
-  }
+    
+    setLoading(false);
+  };
+
+  // Format time display (seconds to min:sec)
+  const formatTime = (seconds: number | undefined): string => {
+    if (!seconds) return '-';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.round(seconds % 60);
+    if (mins === 0) return `${secs} sec`;
+    return `${mins}:${secs.toString().padStart(2, '0')} min`;
+  };
+
+  // Group equipment by supplier
+  const equipmentBySupplier = equipment.reduce((acc, eq) => {
+    const supplier = eq.supplier_name;
+    if (!acc[supplier]) acc[supplier] = [];
+    acc[supplier].push(eq);
+    return acc;
+  }, {} as Record<string, Equipment[]>);
 
   return (
-    <div className="space-y-6">
-      {/* Page header */}
-      <div>
-        <h2 className="text-2xl font-bold text-gray-900">Exposure Calculator</h2>
-        <p className="text-gray-600 mt-1">
-          Calculate exposure times based on your current UV lamp intensity
-        </p>
-      </div>
+    <div className="max-w-4xl mx-auto p-6">
+      <h1 className="text-2xl font-bold mb-2">Exposure Calculator</h1>
+      <p className="text-gray-600 mb-6">Calculate exposure times based on your equipment or reference settings</p>
       
-      <div className="grid lg:grid-cols-2 gap-6">
-        {/* Input panel */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h3 className="font-semibold text-gray-900 mb-6 flex items-center gap-2">
-            <Calculator className="w-5 h-5 text-blue-600" />
-            Input Parameters
-          </h3>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Input Panel */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="font-semibold mb-4 flex items-center gap-2">
+            <span className="text-blue-500">📋</span> Input Parameters
+          </h2>
           
-          <div className="space-y-4">
-            {/* Plate selection */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Select Plate
+          {/* Calculation Method Selection */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Calculation Method
+            </label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="method"
+                  value="equipment"
+                  checked={calculationMethod === 'equipment'}
+                  onChange={(e) => setCalculationMethod(e.target.value as 'equipment')}
+                  className="text-blue-500"
+                />
+                <span>Select my equipment</span>
+                <span className="text-xs text-gray-500">(recommended)</span>
               </label>
-              <select
-                value={selectedPlateId}
-                onChange={(e) => setSelectedPlateId(e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="">Choose a plate...</option>
-                {plates.map(plate => (
-                  <option key={plate.id} value={plate.id}>
-                    {plate.display_name || plate.family_name} ({plate.supplier_name}) - {plate.thickness_mm}mm
-                  </option>
-                ))}
-              </select>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="method"
+                  value="reference"
+                  checked={calculationMethod === 'reference'}
+                  onChange={(e) => setCalculationMethod(e.target.value as 'reference')}
+                  className="text-blue-500"
+                />
+                <span>I have a working reference time</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="method"
+                  value="intensity"
+                  checked={calculationMethod === 'intensity'}
+                  onChange={(e) => setCalculationMethod(e.target.value as 'intensity')}
+                  className="text-blue-500"
+                />
+                <span>I know my UV intensity</span>
+                <span className="text-xs text-gray-500">(radiometer)</span>
+              </label>
             </div>
-            
-            {/* UV Intensity */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+          </div>
+          
+          {/* Equipment Method */}
+          {calculationMethod === 'equipment' && (
+            <>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Exposure Equipment
+                </label>
+                <select
+                  value={selectedEquipment}
+                  onChange={(e) => setSelectedEquipment(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2"
+                >
+                  <option value="">Select equipment...</option>
+                  {Object.keys(equipmentBySupplier).sort().map(supplier => (
+                    <optgroup key={supplier} label={supplier}>
+                      {equipmentBySupplier[supplier].map(eq => (
+                        <option key={eq.id} value={eq.id}>
+                          {eq.model_name} ({eq.uv_source_type}, {eq.nominal_intensity_mw_cm2} mW/cm²)
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+              
+              {selectedEquipmentDetails?.uv_source_type?.includes('Tube') && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Lamp Age (months)
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="24"
+                    value={lampAgeMonths}
+                    onChange={(e) => setLampAgeMonths(parseInt(e.target.value))}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>New</span>
+                    <span className="font-medium">{lampAgeMonths} months</span>
+                    <span>24 mo</span>
+                  </div>
+                  {lampAgeMonths > 0 && (
+                    <p className="text-xs text-orange-600 mt-1">
+                      ⚠️ Estimated intensity: {getEffectiveIntensity().toFixed(1)} mW/cm² 
+                      ({Math.round((1 - getEffectiveIntensity() / selectedEquipmentDetails.nominal_intensity_mw_cm2) * 100)}% degradation)
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+          
+          {/* Reference Time Method */}
+          {calculationMethod === 'reference' && (
+            <>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Reference Plate (your known working plate)
+                </label>
+                <select
+                  value={referencePlate}
+                  onChange={(e) => setReferencePlate(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2"
+                >
+                  <option value="">Select reference plate...</option>
+                  {plates.map(plate => (
+                    <option key={plate.id} value={plate.id}>
+                      {plate.display_name || plate.family_name} ({plate.supplier_name}) - {plate.thickness_mm}mm
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Main Exposure (sec)
+                  </label>
+                  <input
+                    type="number"
+                    value={referenceMainTime}
+                    onChange={(e) => setReferenceMainTime(e.target.value)}
+                    placeholder="e.g., 720"
+                    className="w-full border rounded-lg px-3 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Back Exposure (sec)
+                  </label>
+                  <input
+                    type="number"
+                    value={referenceBackTime}
+                    onChange={(e) => setReferenceBackTime(e.target.value)}
+                    placeholder="e.g., 90"
+                    className="w-full border rounded-lg px-3 py-2"
+                  />
+                </div>
+              </div>
+            </>
+          )}
+          
+          {/* Manual Intensity Method */}
+          {calculationMethod === 'intensity' && (
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 Current UV Intensity (mW/cm²)
               </label>
               <div className="relative">
-                <Sun className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <span className="absolute left-3 top-2.5 text-gray-400">☀️</span>
                 <input
                   type="number"
-                  value={intensity}
-                  onChange={(e) => setIntensity(e.target.value)}
+                  value={manualIntensity}
+                  onChange={(e) => setManualIntensity(e.target.value)}
                   placeholder="e.g., 18"
+                  className="w-full border rounded-lg pl-10 pr-3 py-2"
                   step="0.1"
-                  min="0"
-                  className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
               </div>
               <p className="text-xs text-gray-500 mt-1">
                 Measure with your radiometer at the plate surface
               </p>
             </div>
-            
-            {/* Target Floor (optional) */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+          )}
+          
+          {/* Target Plate (always shown) */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              {calculationMethod === 'reference' ? 'Target Plate (calculate time for)' : 'Select Plate'}
+            </label>
+            <select
+              value={selectedPlate}
+              onChange={(e) => setSelectedPlate(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2"
+            >
+              <option value="">Select plate...</option>
+              {plates.map(plate => (
+                <option key={plate.id} value={plate.id}>
+                  {plate.display_name || plate.family_name} ({plate.supplier_name}) - {plate.thickness_mm}mm
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          {/* Target Floor (optional) */}
+          {calculationMethod !== 'reference' && (
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 Target Floor Thickness (mm) <span className="text-gray-400">optional</span>
               </label>
               <input
                 type="number"
                 value={targetFloor}
                 onChange={(e) => setTargetFloor(e.target.value)}
-                placeholder="e.g., 0.70"
-                step="0.01"
-                min="0"
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="e.g., 0.7"
+                className="w-full border rounded-lg px-3 py-2"
+                step="0.05"
               />
               <p className="text-xs text-gray-500 mt-1">
                 Adjusts back exposure to achieve desired relief depth
               </p>
             </div>
-            
-            {/* Calculate button */}
-            <button
-              onClick={calculate}
-              disabled={!selectedPlateId || !intensity || loading}
-              className="w-full py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
-            >
-              {loading ? (
-                <RefreshCw className="w-5 h-5 animate-spin" />
-              ) : (
-                <>
-                  <Zap className="w-5 h-5" />
-                  Calculate Exposure
-                </>
-              )}
-            </button>
-            
-            {error && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                {error}
-              </div>
+          )}
+          
+          {/* Calculate Button */}
+          <button
+            onClick={handleCalculate}
+            disabled={loading || !selectedPlate}
+            className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 text-white font-medium py-3 px-4 rounded-lg flex items-center justify-center gap-2"
+          >
+            {loading ? (
+              <>
+                <span className="animate-spin">⏳</span> Calculating...
+              </>
+            ) : (
+              <>
+                <span>⚡</span> Calculate Exposure
+              </>
             )}
-          </div>
+          </button>
+          
+          {error && (
+            <p className="text-red-500 text-sm mt-2">{error}</p>
+          )}
         </div>
         
-        {/* Results panel */}
-        <div className="space-y-4">
+        {/* Results Panel */}
+        <div className="bg-white rounded-lg shadow p-6">
           {result ? (
             <>
-              {/* Plate info */}
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <p className="font-medium text-blue-900">{result.plate.name}</p>
-                <p className="text-sm text-blue-700">
-                  {result.plate.supplier} • {result.plate.thickness_mm}mm • {result.plate.process_type}
+              {/* Plate Info Header */}
+              <div className="bg-blue-50 rounded-lg p-4 mb-4">
+                <h3 className="font-semibold text-blue-800">{result.plate?.name}</h3>
+                <p className="text-sm text-blue-600">
+                  {result.plate?.supplier} • {result.plate?.thickness_mm}mm • {result.plate?.process_type}
                 </p>
               </div>
               
-              {/* Exposure times */}
-              <div className="grid grid-cols-2 gap-4">
-                <ExposureCard
-                  label="Back Exposure"
-                  time={result.exposure.back_exposure_time_s}
-                  range={result.exposure.back_exposure_range_s}
-                  icon={Clock}
-                />
-                <ExposureCard
-                  label="Main Exposure"
-                  time={result.exposure.main_exposure_time_s}
-                  range={result.exposure.main_exposure_range_s}
-                  icon={Sun}
-                />
-                <ExposureCard
-                  label="Post Exposure"
-                  time={result.exposure.post_exposure_time_s}
-                  icon={Zap}
-                />
-                <ExposureCard
-                  label="Detack"
-                  time={result.exposure.detack_time_s}
-                  icon={Zap}
-                />
+              {/* Exposure Times */}
+              <div className="space-y-4 mb-6">
+                {/* Back Exposure */}
+                {result.exposure?.back_exposure_time_s && (
+                  <div className="border rounded-lg p-4">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-sm text-gray-500">Back Exposure</p>
+                        <p className="text-2xl font-bold">{formatTime(result.exposure.back_exposure_time_s)}</p>
+                      </div>
+                      <div className="text-right text-sm text-gray-500">
+                        {result.exposure.back_exposure_range_s && (
+                          <p>Range: {formatTime(result.exposure.back_exposure_range_s[0])} - {formatTime(result.exposure.back_exposure_range_s[1])}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Main Exposure */}
+                {result.exposure?.main_exposure_time_s && (
+                  <div className="border rounded-lg p-4">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-sm text-gray-500">Main Exposure</p>
+                        <p className="text-2xl font-bold">{formatTime(result.exposure.main_exposure_time_s)}</p>
+                      </div>
+                      <div className="text-right text-sm text-gray-500">
+                        {result.exposure.main_exposure_range_s && (
+                          <p>Range: {formatTime(result.exposure.main_exposure_range_s[0])} - {formatTime(result.exposure.main_exposure_range_s[1])}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Post Exposure */}
+                {result.exposure?.post_exposure_time_s && (
+                  <div className="border rounded-lg p-4 bg-gray-50">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-sm text-gray-500">Post Exposure</p>
+                        <p className="text-xl font-semibold">{formatTime(result.exposure.post_exposure_time_s)}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Detack */}
+                {result.exposure?.detack_time_s && (
+                  <div className="border rounded-lg p-4 bg-gray-50">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-sm text-gray-500">Light Finishing / Detack</p>
+                        <p className="text-xl font-semibold">{formatTime(result.exposure.detack_time_s)}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
               
               {/* Notes */}
-              {result.notes.length > 0 && (
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                  <p className="text-sm font-medium text-gray-700 mb-2">Notes</p>
+              {result.notes && result.notes.length > 0 && (
+                <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                  <h4 className="font-medium text-sm text-gray-700 mb-2">Notes</h4>
                   <ul className="text-sm text-gray-600 space-y-1">
                     {result.notes.map((note, i) => (
                       <li key={i}>• {note}</li>
@@ -373,25 +577,37 @@ export default function ExposurePage() {
                 </div>
               )}
               
-              {/* Print button */}
-              <button
-                onClick={handlePrint}
-                className="w-full py-2.5 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
-              >
-                <Printer className="w-4 h-4" />
-                Print Recipe Card
-              </button>
+              {/* Method Info */}
+              {result.method === 'reference' && result.reference && (
+                <div className="text-xs text-gray-500 border-t pt-4">
+                  <p>Calculated from reference: {result.reference.plate}</p>
+                  <p>Reference times: Main {result.reference.main_time}s, Back {result.reference.back_time || '-'}s</p>
+                </div>
+              )}
               
-              {/* Printable recipe card (hidden on screen, visible in print) */}
-              <div className="hidden print:block">
-                <RecipeCardPrintable result={result} />
-              </div>
+              {result.equipment && (
+                <div className="text-xs text-gray-500 border-t pt-4">
+                  <p>Equipment: {result.equipment.model_name}</p>
+                  <p>Effective intensity: {result.effective_intensity?.toFixed(1)} mW/cm²</p>
+                  {result.lamp_age_months && result.lamp_age_months > 0 && (
+                    <p>Lamp age adjustment: {result.lamp_age_months} months</p>
+                  )}
+                </div>
+              )}
+              
+              {/* Print Button */}
+              <button
+                onClick={() => window.print()}
+                className="w-full mt-4 border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium py-2 px-4 rounded-lg flex items-center justify-center gap-2"
+              >
+                <span>🖨️</span> Print Recipe Card
+              </button>
             </>
           ) : (
-            <div className="bg-white rounded-xl border border-gray-200 p-8 flex flex-col items-center justify-center text-gray-400">
-              <Calculator className="w-16 h-16 mb-4" />
-              <p className="text-lg font-medium text-gray-600">No calculation yet</p>
-              <p className="text-sm">Select a plate and enter intensity to calculate</p>
+            <div className="text-center text-gray-400 py-12">
+              <p className="text-4xl mb-4">📊</p>
+              <p>Select your parameters and click Calculate</p>
+              <p className="text-sm mt-2">Results will appear here</p>
             </div>
           )}
         </div>
