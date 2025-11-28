@@ -1,960 +1,926 @@
-# FlexoPlate IQ - Complete Backend with Premium Features
-# ======================================================
-# Replace your entire backend/main.py with this file
-# Version 3.0 - Added screening patterns, reference cards, user limits
+"""
+FlexoPlate IQ - Backend API
+Plate Equivalency & Exposure Calculator
+"""
 
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
-from datetime import datetime, timedelta, date
-import bcrypt
-import asyncpg
-import uuid
+from decimal import Decimal
 import os
+import asyncpg
+from contextlib import asynccontextmanager
 
-# JWT handling
-try:
-    from jose import JWTError, jwt
-except ImportError:
-    from python_jose import JWTError, jwt
+# Database connection pool
+db_pool = None
 
-# ============================================================
-# APP SETUP
-# ============================================================
-app = FastAPI(title="FlexoPlate IQ API", version="3.0.0")
 
+def to_float(value) -> float:
+    """Safely convert Decimal or any numeric to float"""
+    if value is None:
+        return 0.0
+    if isinstance(value, Decimal):
+        return float(value)
+    return float(value)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage database connection pool lifecycle"""
+    global db_pool
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        # Railway uses postgres:// but asyncpg needs postgresql://
+        if database_url.startswith("postgres://"):
+            database_url = database_url.replace("postgres://", "postgresql://", 1)
+        db_pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
+        
+        # Auto-initialize database if needed
+        async with db_pool.acquire() as conn:
+            # Check if tables exist
+            tables_exist = await conn.fetchval(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'suppliers')"
+            )
+            if not tables_exist:
+                print("Initializing database schema...")
+                await initialize_database(conn)
+                print("Database initialized successfully!")
+    yield
+    if db_pool:
+        await db_pool.close()
+
+
+async def initialize_database(conn):
+    """Create all tables and seed initial data"""
+    
+    # Enable UUID extension
+    await conn.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
+    
+    # Create tables
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS organizations (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name TEXT NOT NULL,
+            billing_email TEXT,
+            country TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    ''')
+    
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name TEXT NOT NULL UNIQUE,
+            website_url TEXT,
+            country TEXT,
+            is_plate_supplier BOOLEAN NOT NULL DEFAULT FALSE,
+            is_equipment_supplier BOOLEAN NOT NULL DEFAULT FALSE,
+            logo_url TEXT,
+            notes TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    ''')
+    
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS plate_families (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            supplier_id UUID NOT NULL REFERENCES suppliers(id),
+            family_name TEXT NOT NULL,
+            technology_tags TEXT[],
+            process_type TEXT,
+            description TEXT,
+            data_source_url TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    ''')
+    
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS plates (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            plate_family_id UUID NOT NULL REFERENCES plate_families(id),
+            organization_id UUID,
+            sku_code TEXT,
+            display_name TEXT,
+            thickness_mm NUMERIC(5,3) NOT NULL,
+            hardness_shore NUMERIC(5,1),
+            imaging_type TEXT,
+            surface_type TEXT,
+            relief_recommended_mm NUMERIC(5,3),
+            min_lpi INTEGER,
+            max_lpi INTEGER,
+            ink_compatibility TEXT[],
+            substrate_categories TEXT[],
+            applications TEXT[],
+            main_exposure_energy_min_mj_cm2 NUMERIC(7,3),
+            main_exposure_energy_max_mj_cm2 NUMERIC(7,3),
+            back_exposure_energy_min_mj_cm2 NUMERIC(7,3),
+            back_exposure_energy_max_mj_cm2 NUMERIC(7,3),
+            post_exposure_energy_mj_cm2 NUMERIC(7,3),
+            detack_energy_mj_cm2 NUMERIC(7,3),
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            notes TEXT,
+            data_source_url TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    ''')
+    
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS equipment_models (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            supplier_id UUID NOT NULL REFERENCES suppliers(id),
+            model_name TEXT NOT NULL,
+            equipment_type TEXT NOT NULL,
+            technology TEXT,
+            uv_source_type TEXT,
+            nominal_intensity_mw_cm2 NUMERIC(7,2),
+            has_integrated_back_exposure BOOLEAN NOT NULL DEFAULT FALSE,
+            supports_digital_plates BOOLEAN NOT NULL DEFAULT TRUE,
+            supports_analog_plates BOOLEAN NOT NULL DEFAULT TRUE,
+            data_source_url TEXT,
+            notes TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    ''')
+    
+    # Seed suppliers
+    await conn.execute('''
+        INSERT INTO suppliers (name, website_url, country, is_plate_supplier, is_equipment_supplier, notes)
+        VALUES 
+            ('XSYS', 'https://www.xsys.com', 'Germany', TRUE, TRUE, 'nyloflex plates, Catena processing systems'),
+            ('DuPont', 'https://www.dupont.com', 'USA', TRUE, TRUE, 'Cyrel plates and platemaking equipment'),
+            ('Miraclon', 'https://www.miraclon.com', 'USA', TRUE, TRUE, 'FLEXCEL NX plates and systems'),
+            ('Asahi Photoproducts', 'https://www.asahi-photoproducts.com', 'Japan', TRUE, TRUE, 'Water-wash and solvent plates'),
+            ('MacDermid', 'https://www.macdermid.com', 'USA', TRUE, FALSE, 'LUX plates')
+        ON CONFLICT (name) DO NOTHING
+    ''')
+    
+    # Get supplier IDs
+    xsys_id = await conn.fetchval("SELECT id FROM suppliers WHERE name = 'XSYS'")
+    dupont_id = await conn.fetchval("SELECT id FROM suppliers WHERE name = 'DuPont'")
+    miraclon_id = await conn.fetchval("SELECT id FROM suppliers WHERE name = 'Miraclon'")
+    
+    # Seed plate families
+    await conn.execute('''
+        INSERT INTO plate_families (id, supplier_id, family_name, technology_tags, process_type, description)
+        VALUES 
+            (uuid_generate_v4(), $1, 'nyloflex FTF', ARRAY['flat_top_dot', 'digital'], 'solvent', 'Flat-top dot plates for flexible packaging'),
+            (uuid_generate_v4(), $1, 'nyloflex FAH', ARRAY['digital', 'high_durometer'], 'solvent', 'High durometer plates for corrugated'),
+            (uuid_generate_v4(), $1, 'nyloflex ACE', ARRAY['digital', 'thermal'], 'thermal', 'Thermal processing plates'),
+            (uuid_generate_v4(), $2, 'Cyrel EASY', ARRAY['flat_top_dot', 'digital', 'FAST_thermal'], 'thermal', 'FAST thermal plates'),
+            (uuid_generate_v4(), $2, 'Cyrel DFH', ARRAY['digital', 'high_durometer'], 'solvent', 'High durometer solvent plates'),
+            (uuid_generate_v4(), $2, 'Cyrel DSP', ARRAY['flat_top_dot', 'digital'], 'solvent', 'Digital solvent plates for flexible packaging'),
+            (uuid_generate_v4(), $3, 'FLEXCEL NXH', ARRAY['flat_top_dot', 'digital', 'NX_technology'], 'solvent', 'High-performance NX plates'),
+            (uuid_generate_v4(), $3, 'FLEXCEL NXC', ARRAY['flat_top_dot', 'digital', 'corrugated'], 'solvent', 'NX plates for corrugated')
+        ON CONFLICT DO NOTHING
+    ''', xsys_id, dupont_id, miraclon_id)
+    
+    # Get family IDs
+    ftf_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'nyloflex FTF'")
+    fah_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'nyloflex FAH'")
+    ace_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'nyloflex ACE'")
+    easy_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'Cyrel EASY'")
+    dfh_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'Cyrel DFH'")
+    dsp_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'Cyrel DSP'")
+    nxh_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'FLEXCEL NXH'")
+    nxc_id = await conn.fetchval("SELECT id FROM plate_families WHERE family_name = 'FLEXCEL NXC'")
+    
+    # Seed plates - now with matching solvent plates across suppliers
+    plates_data = [
+        # XSYS nyloflex FTF (solvent)
+        (ftf_id, 'FTF-114', 'nyloflex FTF 1.14', 1.14, 69, 'digital', 'flat_top', 133, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 800, 1200, 400, 600),
+        (ftf_id, 'FTF-170', 'nyloflex FTF 1.70', 1.70, 69, 'digital', 'flat_top', 100, 175, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging'], 900, 1400, 450, 700),
+        # XSYS nyloflex FAH (solvent - corrugated)
+        (fah_id, 'FAH-284', 'nyloflex FAH 2.84', 2.84, 78, 'digital', 'round_top', 65, 133, ['water', 'solvent'], ['corrugated', 'linerboard'], ['corrugated_postprint'], 1000, 1600, 500, 800),
+        (fah_id, 'FAH-380', 'nyloflex FAH 3.80', 3.80, 78, 'digital', 'round_top', 48, 100, ['water', 'solvent'], ['corrugated'], ['corrugated_postprint'], 1200, 1800, 600, 900),
+        # XSYS nyloflex ACE (thermal)
+        (ace_id, 'ACE-114', 'nyloflex ACE 1.14', 1.14, 67, 'digital', 'flat_top', 133, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 700, 1100, 350, 550),
+        # DuPont Cyrel EASY (thermal)
+        (easy_id, 'EASY-114', 'Cyrel EASY 1.14', 1.14, 68, 'digital', 'flat_top', 150, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 750, 1100, 375, 550),
+        (easy_id, 'EASY-170', 'Cyrel EASY 1.70', 1.70, 66, 'digital', 'flat_top', 100, 150, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging'], 900, 1350, 450, 675),
+        # DuPont Cyrel DFH (solvent - corrugated)
+        (dfh_id, 'DFH-284', 'Cyrel DFH 2.84', 2.84, 76, 'digital', 'round_top', 65, 120, ['water', 'solvent'], ['corrugated', 'linerboard'], ['corrugated_postprint'], 1100, 1700, 550, 850),
+        (dfh_id, 'DFH-380', 'Cyrel DFH 3.80', 3.80, 76, 'digital', 'round_top', 48, 85, ['water', 'solvent'], ['corrugated'], ['corrugated_postprint'], 1300, 1900, 650, 950),
+        # DuPont Cyrel DSP (solvent - flexible packaging) - NEW! Matches nyloflex FTF
+        (dsp_id, 'DSP-114', 'Cyrel DSP 1.14', 1.14, 70, 'digital', 'flat_top', 133, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 780, 1180, 390, 590),
+        (dsp_id, 'DSP-170', 'Cyrel DSP 1.70', 1.70, 68, 'digital', 'flat_top', 100, 175, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging'], 880, 1380, 440, 690),
+        # Miraclon FLEXCEL NXH (solvent - flexible packaging)
+        (nxh_id, 'NXH-114', 'FLEXCEL NXH 1.14', 1.14, 70, 'digital', 'flat_top', 150, 200, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging', 'labels'], 700, 1050, 350, 525),
+        (nxh_id, 'NXH-170', 'FLEXCEL NXH 1.70', 1.70, 70, 'digital', 'flat_top', 120, 175, ['solvent', 'water', 'UV'], ['film', 'coated_paper'], ['flexible_packaging'], 800, 1200, 400, 600),
+        # Miraclon FLEXCEL NXC (solvent - corrugated)
+        (nxc_id, 'NXC-284', 'FLEXCEL NXC 2.84', 2.84, 72, 'digital', 'flat_top', 85, 150, ['water', 'solvent'], ['corrugated', 'linerboard'], ['corrugated_preprint', 'corrugated_postprint'], 950, 1450, 475, 725),
+        (nxc_id, 'NXC-380', 'FLEXCEL NXC 3.80', 3.80, 72, 'digital', 'flat_top', 65, 120, ['water', 'solvent'], ['corrugated'], ['corrugated_postprint'], 1100, 1650, 550, 825),
+    ]
+    
+    for plate in plates_data:
+        if plate[0] is not None:  # Only insert if family exists
+            await conn.execute('''
+                INSERT INTO plates (plate_family_id, sku_code, display_name, thickness_mm, hardness_shore, 
+                                  imaging_type, surface_type, min_lpi, max_lpi, ink_compatibility, 
+                                  substrate_categories, applications, main_exposure_energy_min_mj_cm2,
+                                  main_exposure_energy_max_mj_cm2, back_exposure_energy_min_mj_cm2,
+                                  back_exposure_energy_max_mj_cm2)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                ON CONFLICT DO NOTHING
+            ''', *plate)
+    
+    print(f"Seeded {len(plates_data)} plates")
+
+
+app = FastAPI(
+    title="FlexoPlate IQ API",
+    description="Plate Equivalency & Exposure Calculator for Flexographic Printing",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS - allow frontend to connect
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In production, restrict to your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:IefWwmDCTTlBrxmERJvpPLZvozhkjaNE@shortline.proxy.rlwy.net:39738/railway")
-SECRET_KEY = os.getenv("SECRET_KEY", "flexoplate-iq-secret-key-change-in-production-2024")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 30
+# ============================================================================
+# MODELS
+# ============================================================================
 
-security = HTTPBearer(auto_error=False)
-pool: asyncpg.Pool = None
+class PlateBase(BaseModel):
+    id: str
+    sku_code: Optional[str]
+    display_name: Optional[str]
+    thickness_mm: float
+    hardness_shore: Optional[float]
+    imaging_type: Optional[str]
+    surface_type: Optional[str]
+    min_lpi: Optional[int]
+    max_lpi: Optional[int]
+    ink_compatibility: Optional[List[str]]
+    substrate_categories: Optional[List[str]]
+    applications: Optional[List[str]]
+    family_name: str
+    process_type: Optional[str]
+    supplier_name: str
 
-# ============================================================
-# DATABASE CONNECTION
-# ============================================================
-@app.on_event("startup")
-async def startup():
-    global pool
-    pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+class PlateEquivalent(PlateBase):
+    similarity_score: int
+    match_notes: List[str]
 
-@app.on_event("shutdown")
-async def shutdown():
-    await pool.close()
+class EquivalencyRequest(BaseModel):
+    source_plate_id: str
+    target_supplier: Optional[str] = None
+    substrate: Optional[str] = None
+    ink_system: Optional[str] = None
+    application: Optional[str] = None
 
-# ============================================================
-# PYDANTIC MODELS
-# ============================================================
-class UserRegister(BaseModel):
-    email: str
-    password: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    company_name: Optional[str] = None
-    job_title: Optional[str] = None
+class EquivalencyWeights(BaseModel):
+    thickness: int = 40
+    process_type: int = 20
+    hardness: int = 15
+    surface_type: int = 10
+    lpi_range: int = 5
+    application: int = 5
+    ink_compat: int = 5
+    hardness_tolerance: float = 2.0
+    thickness_tolerance_mm: float = 0.05
 
-class UserLogin(BaseModel):
-    email: str
-    password: str
-
-class UserUpdate(BaseModel):
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    job_title: Optional[str] = None
-    phone: Optional[str] = None
-
-class EquipmentAdd(BaseModel):
-    equipment_model_id: str
-    nickname: str
-    lamp_install_date: Optional[str] = None
-    location: Optional[str] = None
-
-class RecipeSave(BaseModel):
-    name: str
+class ExposureCalculation(BaseModel):
     plate_id: str
-    main_exposure_time_s: int
-    back_exposure_time_s: int
-    customer_name: Optional[str] = None
-    job_number: Optional[str] = None
-    notes: Optional[str] = None
-    equipment_id: Optional[str] = None
-
-class ExposureCalculateRequest(BaseModel):
-    plate_id: str
+    equipment_instance_id: Optional[str] = None
     current_intensity_mw_cm2: float
     target_floor_mm: Optional[float] = None
 
-class PlateNoteAdd(BaseModel):
-    plate_id: str
-    note: str
-    note_type: Optional[str] = "general"
-    customer_name: Optional[str] = None
-    job_number: Optional[str] = None
+# ============================================================================
+# DATABASE HELPERS
+# ============================================================================
 
-# ============================================================
-# AUTH HELPER FUNCTIONS (using bcrypt directly)
-# ============================================================
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+async def get_db():
+    """Get database connection from pool"""
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database not connected")
+    async with db_pool.acquire() as conn:
+        yield conn
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+# ============================================================================
+# PLATE MATCHING ALGORITHM
+# ============================================================================
 
-def create_access_token(user_id: str) -> str:
-    expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
-    to_encode = {"sub": user_id, "exp": expire}
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-def decode_token(token: str) -> Optional[str]:
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload.get("sub")
-    except JWTError:
-        return None
-
-async def get_current_user_optional(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Returns user dict if authenticated, None if guest."""
-    if not credentials:
-        return None
+def calculate_range_overlap(min1, max1, min2, max2) -> float:
+    """Calculate overlap ratio between two ranges (0.0 to 1.0)"""
+    if min1 is None or max1 is None or min2 is None or max2 is None:
+        return 0.5  # Neutral if data missing
     
-    user_id = decode_token(credentials.credentials)
-    if not user_id:
-        return None
+    min1, max1, min2, max2 = float(min1), float(max1), float(min2), float(max2)
     
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT id, email, first_name, last_name, user_tier, max_plates, max_equipment, max_recipes FROM users WHERE id = $1",
-            uuid.UUID(user_id)
-        )
-        if row:
-            return {
-                "id": row['id'],
-                "email": row['email'],
-                "first_name": row['first_name'],
-                "last_name": row['last_name'],
-                "user_tier": row['user_tier'] or 'free',
-                "max_plates": row['max_plates'] or 5,
-                "max_equipment": row['max_equipment'] or 2,
-                "max_recipes": row['max_recipes'] or 5
-            }
-    return None
+    overlap_start = max(min1, min2)
+    overlap_end = min(max1, max2)
+    
+    if overlap_start >= overlap_end:
+        return 0.0
+    
+    overlap = overlap_end - overlap_start
+    total_range = max(max1, max2) - min(min1, min2)
+    
+    return overlap / total_range if total_range > 0 else 0.0
 
-async def get_current_user_required(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Returns user dict, raises 401 if not authenticated."""
-    if not credentials:
-        raise HTTPException(status_code=401, detail="Authentication required")
+def calculate_array_overlap(arr1: List[str], arr2: List[str]) -> float:
+    """Calculate overlap ratio between two arrays (0.0 to 1.0)"""
+    if not arr1 or not arr2:
+        return 0.5  # Neutral if data missing
     
-    user_id = decode_token(credentials.credentials)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    set1, set2 = set(arr1), set(arr2)
+    intersection = len(set1 & set2)
+    union = len(set1 | set2)
     
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT id, email, first_name, last_name, user_tier, max_plates, max_equipment, max_recipes FROM users WHERE id = $1",
-            uuid.UUID(user_id)
-        )
-        if not row:
-            raise HTTPException(status_code=401, detail="User not found")
-        
-        return {
-            "id": row['id'],
-            "email": row['email'],
-            "first_name": row['first_name'],
-            "last_name": row['last_name'],
-            "user_tier": row['user_tier'] or 'free',
-            "max_plates": row['max_plates'] or 5,
-            "max_equipment": row['max_equipment'] or 2,
-            "max_recipes": row['max_recipes'] or 5
-        }
+    return intersection / union if union > 0 else 0.0
 
-# ============================================================
-# LIMIT CHECKING HELPER
-# ============================================================
-async def check_user_limit(conn, user_id: uuid.UUID, limit_type: str) -> tuple:
-    """Check if user has reached their limit. Returns (can_add, current_count, max_limit)"""
-    user_data = await conn.fetchrow(
-        "SELECT max_plates, max_equipment, max_recipes FROM users WHERE id = $1",
-        user_id
-    )
+def calculate_plate_similarity(
+    source: dict, 
+    target: dict, 
+    weights: EquivalencyWeights,
+    context: dict = None
+) -> tuple:
+    """
+    Calculate similarity score between two plates.
+    Returns (score 0-100, list of notes)
+    """
+    notes = []
+    score = 0.0
     
-    if limit_type == "plates":
-        count = await conn.fetchval(
-            "SELECT COUNT(*) FROM user_favorite_plates WHERE user_id = $1",
-            user_id
-        )
-        max_limit = user_data['max_plates'] or 5
-    elif limit_type == "equipment":
-        count = await conn.fetchval(
-            "SELECT COUNT(*) FROM user_equipment WHERE user_id = $1 AND is_active = TRUE",
-            user_id
-        )
-        max_limit = user_data['max_equipment'] or 2
-    elif limit_type == "recipes":
-        count = await conn.fetchval(
-            "SELECT COUNT(*) FROM saved_recipes WHERE user_id = $1 AND is_active = TRUE",
-            user_id
-        )
-        max_limit = user_data['max_recipes'] or 5
+    # DISQUALIFIERS - must match or very close
+    
+    # 1. Process type MUST match
+    if source.get('process_type') != target.get('process_type'):
+        return 0, ["Process type mismatch - not compatible"]
+    
+    # 2. Thickness must be within tolerance
+    source_thickness = to_float(source.get('thickness_mm'))
+    target_thickness = to_float(target.get('thickness_mm'))
+    thickness_diff = abs(source_thickness - target_thickness)
+    
+    if thickness_diff > weights.thickness_tolerance_mm:
+        return 0, [f"Thickness difference ({thickness_diff:.2f}mm) exceeds tolerance"]
+    
+    # SCORED ATTRIBUTES
+    
+    # Thickness - exact match gets full points
+    if thickness_diff == 0:
+        score += weights.thickness
     else:
-        return True, 0, 999
+        # Partial credit for close match
+        thickness_score = weights.thickness * (1 - thickness_diff / weights.thickness_tolerance_mm)
+        score += thickness_score
     
-    return count < max_limit, count, max_limit
+    # Process type match (already verified above)
+    score += weights.process_type
+    
+    # Hardness similarity
+    source_hardness = source.get('hardness_shore')
+    target_hardness = target.get('hardness_shore')
+    if source_hardness and target_hardness:
+        source_h = to_float(source_hardness)
+        target_h = to_float(target_hardness)
+        hardness_diff = abs(source_h - target_h)
+        
+        if hardness_diff <= weights.hardness_tolerance:
+            hardness_score = weights.hardness * (1 - hardness_diff / weights.hardness_tolerance)
+            score += hardness_score
+            if hardness_diff > 1:
+                notes.append(f"Slightly {'harder' if target_h > source_h else 'softer'} ({hardness_diff:.0f} Shore difference)")
+        else:
+            notes.append(f"Significant hardness difference ({hardness_diff:.0f} Shore) - may affect ink transfer")
+    else:
+        score += weights.hardness * 0.5  # Neutral if missing
+    
+    # Surface type match
+    if source.get('surface_type') == target.get('surface_type'):
+        score += weights.surface_type
+    elif source.get('surface_type') and target.get('surface_type'):
+        notes.append(f"Different surface type: {target.get('surface_type')} vs {source.get('surface_type')}")
+    
+    # LPI range overlap
+    lpi_overlap = calculate_range_overlap(
+        source.get('min_lpi'), source.get('max_lpi'),
+        target.get('min_lpi'), target.get('max_lpi')
+    )
+    score += weights.lpi_range * lpi_overlap
+    if lpi_overlap < 0.5 and source.get('min_lpi') and target.get('min_lpi'):
+        notes.append(f"Limited LPI overlap - verify screen ruling compatibility")
+    
+    # Application match
+    app_overlap = calculate_array_overlap(
+        source.get('applications') or [],
+        target.get('applications') or []
+    )
+    score += weights.application * app_overlap
+    
+    # Ink compatibility
+    ink_overlap = calculate_array_overlap(
+        source.get('ink_compatibility') or [],
+        target.get('ink_compatibility') or []
+    )
+    score += weights.ink_compat * ink_overlap
+    
+    # Context bonuses (if user specified preferences)
+    if context:
+        if context.get('substrate') and target.get('substrate_categories'):
+            if context['substrate'] in target['substrate_categories']:
+                score += 3
+                notes.append(f"✓ Matches substrate: {context['substrate']}")
+        
+        if context.get('ink_system') and target.get('ink_compatibility'):
+            if context['ink_system'] in target['ink_compatibility']:
+                score += 2
+                notes.append(f"✓ Compatible with {context['ink_system']} inks")
+        
+        if context.get('application') and target.get('applications'):
+            if context['application'] in target['applications']:
+                score += 3
+                notes.append(f"✓ Suitable for {context['application']}")
+    
+    # Normalize to 0-100
+    max_possible = (
+        weights.thickness + weights.process_type + weights.hardness +
+        weights.surface_type + weights.lpi_range + weights.application + 
+        weights.ink_compat + 8  # Context bonuses
+    )
+    normalized_score = int(min(100, (score / max_possible) * 100))
+    
+    return normalized_score, notes
 
-# ============================================================
-# ROOT ENDPOINT
-# ============================================================
+# ============================================================================
+# API ENDPOINTS
+# ============================================================================
+
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "FlexoPlate IQ API", "version": "3.0.0"}
-
-# ============================================================
-# AUTH ENDPOINTS
-# ============================================================
-@app.post("/api/auth/register")
-async def register(data: UserRegister):
-    async with pool.acquire() as conn:
-        existing = await conn.fetchval(
-            "SELECT id FROM users WHERE email = $1",
-            data.email.lower()
-        )
-        if existing:
-            raise HTTPException(status_code=400, detail="Email already registered")
-        
-        user_id = uuid.uuid4()
-        await conn.execute("""
-            INSERT INTO users (id, email, password_hash, first_name, last_name, job_title, user_tier, max_plates, max_equipment, max_recipes)
-            VALUES ($1, $2, $3, $4, $5, $6, 'free', 5, 2, 5)
-        """, user_id, data.email.lower(), hash_password(data.password),
-            data.first_name, data.last_name, data.job_title)
-        
-        if data.company_name:
-            company_id = uuid.uuid4()
-            await conn.execute("""
-                INSERT INTO companies (id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING
-            """, company_id, data.company_name)
-            
-            actual_company_id = await conn.fetchval(
-                "SELECT id FROM companies WHERE name = $1", data.company_name
-            )
-            await conn.execute("""
-                INSERT INTO user_companies (user_id, company_id, is_primary)
-                VALUES ($1, $2, TRUE)
-            """, user_id, actual_company_id)
-        
-        token = create_access_token(str(user_id))
-        
-        return {
-            "token": token,
-            "user": {
-                "id": str(user_id),
-                "email": data.email.lower(),
-                "first_name": data.first_name,
-                "last_name": data.last_name,
-                "user_tier": "free"
-            }
-        }
-
-@app.post("/api/auth/login")
-async def login(data: UserLogin):
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT id, email, password_hash, first_name, last_name, user_tier FROM users WHERE email = $1",
-            data.email.lower()
-        )
-        
-        if not row or not verify_password(data.password, row['password_hash']):
-            raise HTTPException(status_code=401, detail="Invalid email or password")
-        
-        token = create_access_token(str(row['id']))
-        
-        return {
-            "token": token,
-            "user": {
-                "id": str(row['id']),
-                "email": row['email'],
-                "first_name": row['first_name'],
-                "last_name": row['last_name'],
-                "user_tier": row['user_tier'] or 'free'
-            }
-        }
-
-@app.get("/api/auth/me")
-async def get_me(user: dict = Depends(get_current_user_required)):
     return {
-        "id": str(user['id']),
-        "email": user['email'],
-        "first_name": user['first_name'],
-        "last_name": user['last_name'],
-        "user_tier": user['user_tier']
-    }
-
-# ============================================================
-# USER LIMITS & TIER ENDPOINTS
-# ============================================================
-@app.get("/api/me/limits")
-async def get_my_limits(user: dict = Depends(get_current_user_required)):
-    """Get user's current usage vs limits."""
-    async with pool.acquire() as conn:
-        counts = await conn.fetchrow("""
-            SELECT 
-                (SELECT COUNT(*) FROM user_favorite_plates WHERE user_id = $1) as plates_count,
-                (SELECT COUNT(*) FROM user_equipment WHERE user_id = $1 AND is_active = TRUE) as equipment_count,
-                (SELECT COUNT(*) FROM saved_recipes WHERE user_id = $1 AND is_active = TRUE) as recipes_count
-        """, user['id'])
-        
-        return {
-            "tier": user['user_tier'],
-            "usage": {
-                "plates": {
-                    "used": counts['plates_count'],
-                    "limit": user['max_plates'],
-                    "remaining": max(0, user['max_plates'] - counts['plates_count'])
-                },
-                "equipment": {
-                    "used": counts['equipment_count'],
-                    "limit": user['max_equipment'],
-                    "remaining": max(0, user['max_equipment'] - counts['equipment_count'])
-                },
-                "recipes": {
-                    "used": counts['recipes_count'],
-                    "limit": user['max_recipes'],
-                    "remaining": max(0, user['max_recipes'] - counts['recipes_count'])
-                }
-            }
-        }
-
-@app.get("/api/me/tier")
-async def get_my_tier(user: dict = Depends(get_current_user_required)):
-    """Get user's tier information."""
-    tier = user['user_tier']
-    return {
-        "tier": tier,
-        "is_premium": tier == 'premium',
-        "features": {
-            "max_plates": user['max_plates'],
-            "max_equipment": user['max_equipment'],
-            "max_recipes": user['max_recipes'],
-            "screening_patterns": tier == 'premium',
-            "premium_reference_cards": tier == 'premium',
-            "export_reports": tier == 'premium',
-            "qc_logging": tier == 'premium'
+        "name": "FlexoPlate IQ API",
+        "version": "1.0.0",
+        "status": "running",
+        "endpoints": {
+            "plates": "/api/plates",
+            "equivalency": "/api/equivalency",
+            "exposure": "/api/exposure/calculate",
+            "suppliers": "/api/suppliers"
         }
     }
 
-# ============================================================
-# SCREENING PATTERNS ENDPOINTS
-# ============================================================
-@app.get("/api/screening-patterns")
-async def get_screening_patterns(
-    pattern_type: Optional[str] = None,
-    process_type: Optional[str] = None,
-    user: dict = Depends(get_current_user_optional)
-):
-    """Get screening patterns. Premium patterns marked as locked for free users."""
-    async with pool.acquire() as conn:
-        is_premium = user and user.get('user_tier') == 'premium'
-        
-        conditions = ["1=1"]
-        params = []
-        idx = 1
-        
-        if pattern_type:
-            conditions.append(f"pattern_type = ${idx}")
-            params.append(pattern_type)
-            idx += 1
-        
-        if process_type:
-            conditions.append(f"${idx} = ANY(compatible_process_types)")
-            params.append(process_type)
-            idx += 1
-        
-        query = f"""
-            SELECT * FROM screening_patterns
-            WHERE {' AND '.join(conditions)}
-            ORDER BY is_premium, name
-        """
-        
-        rows = await conn.fetch(query, *params)
-        
-        result = []
-        for row in rows:
-            r = dict(row)
-            r['id'] = str(r['id'])
-            r['locked'] = r.get('is_premium', False) and not is_premium
-            result.append(r)
-        
-        return result
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    db_status = "connected" if db_pool else "disconnected"
+    return {"status": "healthy", "database": db_status}
 
-@app.get("/api/screening-patterns/{pattern_id}")
-async def get_screening_pattern(pattern_id: str, user: dict = Depends(get_current_user_optional)):
-    """Get single screening pattern details."""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM screening_patterns WHERE id = $1",
-            uuid.UUID(pattern_id)
-        )
-        
-        if not row:
-            raise HTTPException(status_code=404, detail="Pattern not found")
-        
-        result = dict(row)
-        result['id'] = str(result['id'])
-        
-        is_premium = user and user.get('user_tier') == 'premium'
-        if result.get('is_premium') and not is_premium:
-            raise HTTPException(status_code=403, detail="Premium feature - upgrade to access full details")
-        
-        return result
+# ----------------------------------------------------------------------------
+# SUPPLIERS
+# ----------------------------------------------------------------------------
 
-# ============================================================
-# QUICK REFERENCE CARDS ENDPOINTS
-# ============================================================
-@app.get("/api/reference-cards")
-async def get_reference_cards(
-    category: Optional[str] = None,
-    user: dict = Depends(get_current_user_optional)
-):
-    """Get quick reference cards."""
-    async with pool.acquire() as conn:
-        is_premium = user and user.get('user_tier') == 'premium'
-        
-        conditions = ["1=1"]
-        params = []
-        idx = 1
-        
-        if category:
-            conditions.append(f"category = ${idx}")
-            params.append(category)
-            idx += 1
-        
-        query = f"""
-            SELECT * FROM quick_reference_cards
-            WHERE {' AND '.join(conditions)}
-            ORDER BY display_order, title
-        """
-        
-        rows = await conn.fetch(query, *params)
-        
-        result = []
-        for row in rows:
-            r = dict(row)
-            r['id'] = str(r['id'])
-            r['locked'] = r.get('is_premium', False) and not is_premium
-            if r['locked']:
-                r['content'] = "Premium content - upgrade to view"
-            result.append(r)
-        
-        return result
-
-@app.get("/api/reference-cards/categories")
-async def get_reference_card_categories():
-    """Get list of reference card categories."""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT DISTINCT category, COUNT(*) as count
-            FROM quick_reference_cards
-            GROUP BY category
-            ORDER BY category
-        """)
-        return [{"category": r['category'], "count": r['count']} for r in rows]
-
-# ============================================================
-# USER PLATE NOTES ENDPOINTS
-# ============================================================
-@app.get("/api/me/notes")
-async def get_my_notes(
-    plate_id: Optional[str] = None,
-    user: dict = Depends(get_current_user_required)
-):
-    """Get user's plate notes."""
-    async with pool.acquire() as conn:
-        if plate_id:
-            rows = await conn.fetch("""
-                SELECT upn.*, p.display_name as plate_name
-                FROM user_plate_notes upn
-                JOIN plates p ON upn.plate_id = p.id
-                WHERE upn.user_id = $1 AND upn.plate_id = $2
-                ORDER BY upn.is_pinned DESC, upn.updated_at DESC
-            """, user['id'], uuid.UUID(plate_id))
-        else:
-            rows = await conn.fetch("""
-                SELECT upn.*, p.display_name as plate_name
-                FROM user_plate_notes upn
-                JOIN plates p ON upn.plate_id = p.id
-                WHERE upn.user_id = $1
-                ORDER BY upn.is_pinned DESC, upn.updated_at DESC
-                LIMIT 50
-            """, user['id'])
-        
-        result = []
-        for row in rows:
-            r = dict(row)
-            r['id'] = str(r['id'])
-            r['user_id'] = str(r['user_id'])
-            r['plate_id'] = str(r['plate_id'])
-            result.append(r)
-        
-        return result
-
-@app.post("/api/me/notes")
-async def add_plate_note(data: PlateNoteAdd, user: dict = Depends(get_current_user_required)):
-    """Add note to a plate."""
-    async with pool.acquire() as conn:
-        note_id = uuid.uuid4()
-        await conn.execute("""
-            INSERT INTO user_plate_notes (id, user_id, plate_id, note, note_type, customer_name, job_number)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-        """, note_id, user['id'], uuid.UUID(data.plate_id), data.note, 
-            data.note_type, data.customer_name, data.job_number)
-        
-        return {"id": str(note_id), "message": "Note saved"}
-
-@app.delete("/api/me/notes/{note_id}")
-async def delete_plate_note(note_id: str, user: dict = Depends(get_current_user_required)):
-    """Delete a plate note."""
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM user_plate_notes WHERE id = $1 AND user_id = $2",
-            uuid.UUID(note_id), user['id']
-        )
-        return {"message": "Note deleted"}
-
-# ============================================================
-# SUPPLIERS ENDPOINT
-# ============================================================
 @app.get("/api/suppliers")
-async def get_suppliers():
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT id, name FROM suppliers ORDER BY name")
-        return [{"id": str(r['id']), "name": r['name']} for r in rows]
-
-# ============================================================
-# PLATES ENDPOINTS
-# ============================================================
-@app.get("/api/plates")
-async def get_plates(
-    supplier: Optional[str] = None,
-    thickness: Optional[float] = None,
-    process_type: Optional[str] = None,
-    limit: int = 100
+async def list_suppliers(
+    plate_suppliers_only: bool = False,
+    conn = Depends(get_db)
 ):
-    async with pool.acquire() as conn:
-        conditions = ["1=1"]
-        params = []
-        idx = 1
-        
-        if supplier:
-            conditions.append(f"s.name = ${idx}")
-            params.append(supplier)
-            idx += 1
-        
-        if thickness:
-            conditions.append(f"ABS(p.thickness_mm - ${idx}) < 0.01")
-            params.append(thickness)
-            idx += 1
-        
-        if process_type:
-            conditions.append(f"pf.process_type = ${idx}")
-            params.append(process_type)
-            idx += 1
-        
-        query = f"""
-            SELECT p.id, p.display_name, p.thickness_mm, p.hardness_shore_a as hardness_shore,
-                   pf.family_name, pf.process_type, pf.imaging_type, pf.surface_type,
-                   s.name as supplier_name
-            FROM plates p
-            JOIN plate_families pf ON p.plate_family_id = pf.id
-            JOIN suppliers s ON pf.supplier_id = s.id
-            WHERE {' AND '.join(conditions)}
-            ORDER BY s.name, p.display_name
-            LIMIT ${idx}
-        """
-        params.append(limit)
-        
-        rows = await conn.fetch(query, *params)
-        
-        result = []
-        for row in rows:
-            r = dict(row)
-            r['id'] = str(r['id'])
-            result.append(r)
-        return result
+    """List all suppliers"""
+    query = """
+        SELECT id, name, website_url, country, is_plate_supplier, is_equipment_supplier
+        FROM suppliers
+        WHERE ($1 = FALSE OR is_plate_supplier = TRUE)
+        ORDER BY name
+    """
+    rows = await conn.fetch(query, plate_suppliers_only)
+    return [dict(row) for row in rows]
+
+# ----------------------------------------------------------------------------
+# PLATES
+# ----------------------------------------------------------------------------
+
+@app.get("/api/plates")
+async def list_plates(
+    supplier: Optional[str] = None,
+    family: Optional[str] = None,
+    thickness_mm: Optional[float] = None,
+    process_type: Optional[str] = None,
+    imaging_type: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = Query(default=50, le=200),
+    conn = Depends(get_db)
+):
+    """List plates with optional filters"""
+    query = """
+        SELECT 
+            p.id::text,
+            p.sku_code,
+            p.display_name,
+            p.thickness_mm,
+            p.hardness_shore,
+            p.imaging_type,
+            p.surface_type,
+            p.min_lpi,
+            p.max_lpi,
+            p.ink_compatibility,
+            p.substrate_categories,
+            p.applications,
+            p.main_exposure_energy_min_mj_cm2,
+            p.main_exposure_energy_max_mj_cm2,
+            p.is_active,
+            pf.family_name,
+            pf.process_type,
+            pf.technology_tags,
+            s.name as supplier_name
+        FROM plates p
+        JOIN plate_families pf ON p.plate_family_id = pf.id
+        JOIN suppliers s ON pf.supplier_id = s.id
+        WHERE p.is_active = TRUE
+          AND p.organization_id IS NULL
+          AND ($1::text IS NULL OR s.name ILIKE $1)
+          AND ($2::text IS NULL OR pf.family_name ILIKE $2)
+          AND ($3::numeric IS NULL OR p.thickness_mm = $3)
+          AND ($4::text IS NULL OR pf.process_type = $4)
+          AND ($5::text IS NULL OR p.imaging_type = $5)
+          AND ($6::text IS NULL OR 
+               p.display_name ILIKE '%' || $6 || '%' OR
+               p.sku_code ILIKE '%' || $6 || '%' OR
+               pf.family_name ILIKE '%' || $6 || '%')
+        ORDER BY s.name, pf.family_name, p.thickness_mm
+        LIMIT $7
+    """
+    rows = await conn.fetch(
+        query, 
+        supplier, family, thickness_mm, process_type, imaging_type, search,
+        limit
+    )
+    return [dict(row) for row in rows]
 
 @app.get("/api/plates/{plate_id}")
-async def get_plate(plate_id: str):
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-            SELECT p.*, pf.family_name, pf.process_type, pf.imaging_type, pf.surface_type,
-                   s.name as supplier_name
-            FROM plates p
-            JOIN plate_families pf ON p.plate_family_id = pf.id
-            JOIN suppliers s ON pf.supplier_id = s.id
-            WHERE p.id = $1
-        """, uuid.UUID(plate_id))
-        
-        if not row:
-            raise HTTPException(status_code=404, detail="Plate not found")
-        
-        result = dict(row)
-        result['id'] = str(result['id'])
-        result['plate_family_id'] = str(result['plate_family_id'])
-        return result
+async def get_plate(plate_id: str, conn = Depends(get_db)):
+    """Get single plate by ID"""
+    query = """
+        SELECT 
+            p.id::text,
+            p.sku_code,
+            p.display_name,
+            p.thickness_mm,
+            p.hardness_shore,
+            p.imaging_type,
+            p.surface_type,
+            p.relief_recommended_mm,
+            p.min_lpi,
+            p.max_lpi,
+            p.ink_compatibility,
+            p.substrate_categories,
+            p.applications,
+            p.main_exposure_energy_min_mj_cm2,
+            p.main_exposure_energy_max_mj_cm2,
+            p.back_exposure_energy_min_mj_cm2,
+            p.back_exposure_energy_max_mj_cm2,
+            p.post_exposure_energy_mj_cm2,
+            p.detack_energy_mj_cm2,
+            p.notes,
+            pf.family_name,
+            pf.process_type,
+            pf.technology_tags,
+            pf.description as family_description,
+            s.name as supplier_name,
+            s.website_url as supplier_url
+        FROM plates p
+        JOIN plate_families pf ON p.plate_family_id = pf.id
+        JOIN suppliers s ON pf.supplier_id = s.id
+        WHERE p.id = $1::uuid
+    """
+    row = await conn.fetchrow(query, plate_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Plate not found")
+    return dict(row)
 
-# ============================================================
-# EQUIVALENCY ENDPOINT
-# ============================================================
-@app.get("/api/equivalency/find")
-async def find_equivalent_plates(
+# ----------------------------------------------------------------------------
+# PLATE EQUIVALENCY
+# ----------------------------------------------------------------------------
+
+@app.post("/api/equivalency/find")
+async def find_equivalents(
+    request: EquivalencyRequest,
+    conn = Depends(get_db)
+):
+    """Find equivalent plates for a given source plate"""
+    
+    # Get source plate
+    source_query = """
+        SELECT 
+            p.id::text,
+            p.sku_code,
+            p.display_name,
+            p.thickness_mm,
+            p.hardness_shore,
+            p.imaging_type,
+            p.surface_type,
+            p.min_lpi,
+            p.max_lpi,
+            p.ink_compatibility,
+            p.substrate_categories,
+            p.applications,
+            pf.family_name,
+            pf.process_type,
+            s.name as supplier_name
+        FROM plates p
+        JOIN plate_families pf ON p.plate_family_id = pf.id
+        JOIN suppliers s ON pf.supplier_id = s.id
+        WHERE p.id = $1::uuid
+    """
+    source_row = await conn.fetchrow(source_query, request.source_plate_id)
+    if not source_row:
+        raise HTTPException(status_code=404, detail="Source plate not found")
+    
+    source = dict(source_row)
+    
+    # Get candidate plates (different supplier, same process type, close thickness)
+    candidates_query = """
+        SELECT 
+            p.id::text,
+            p.sku_code,
+            p.display_name,
+            p.thickness_mm,
+            p.hardness_shore,
+            p.imaging_type,
+            p.surface_type,
+            p.min_lpi,
+            p.max_lpi,
+            p.ink_compatibility,
+            p.substrate_categories,
+            p.applications,
+            pf.family_name,
+            pf.process_type,
+            s.name as supplier_name
+        FROM plates p
+        JOIN plate_families pf ON p.plate_family_id = pf.id
+        JOIN suppliers s ON pf.supplier_id = s.id
+        WHERE p.is_active = TRUE
+          AND p.organization_id IS NULL
+          AND p.id != $1::uuid
+          AND s.name != $2
+          AND pf.process_type = $3
+          AND ABS(p.thickness_mm - $4) <= 0.1
+          AND ($5::text IS NULL OR s.name ILIKE $5)
+        ORDER BY ABS(p.thickness_mm - $4), s.name
+        LIMIT 50
+    """
+    candidate_rows = await conn.fetch(
+        candidates_query,
+        request.source_plate_id,
+        source['supplier_name'],
+        source['process_type'],
+        to_float(source['thickness_mm']),
+        request.target_supplier
+    )
+    
+    # Calculate similarity for each candidate
+    weights = EquivalencyWeights()
+    context = {
+        'substrate': request.substrate,
+        'ink_system': request.ink_system,
+        'application': request.application
+    }
+    
+    results = []
+    for row in candidate_rows:
+        target = dict(row)
+        score, notes = calculate_plate_similarity(source, target, weights, context)
+        
+        if score > 0:  # Only include viable matches
+            results.append({
+                **target,
+                'similarity_score': score,
+                'match_notes': notes
+            })
+    
+    # Sort by score descending
+    results.sort(key=lambda x: x['similarity_score'], reverse=True)
+    
+    return {
+        'source_plate': source,
+        'equivalents': results[:10],
+        'total_candidates': len(results)
+    }
+
+@app.get("/api/equivalency/quick")
+async def quick_equivalency(
     plate_id: str,
     target_supplier: Optional[str] = None,
-    limit: int = 10
+    conn = Depends(get_db)
 ):
-    async with pool.acquire() as conn:
-        source = await conn.fetchrow("""
-            SELECT p.*, pf.process_type, pf.imaging_type, pf.surface_type, s.name as supplier_name
-            FROM plates p
-            JOIN plate_families pf ON p.plate_family_id = pf.id
-            JOIN suppliers s ON pf.supplier_id = s.id
-            WHERE p.id = $1
-        """, uuid.UUID(plate_id))
-        
-        if not source:
-            raise HTTPException(status_code=404, detail="Source plate not found")
-        
-        conditions = ["p.id != $1", "ABS(p.thickness_mm - $2) < 0.1"]
-        params = [uuid.UUID(plate_id), source['thickness_mm']]
-        idx = 3
-        
-        if target_supplier:
-            conditions.append(f"s.name = ${idx}")
-            params.append(target_supplier)
-            idx += 1
-        
-        query = f"""
-            SELECT p.id, p.display_name, p.thickness_mm, p.hardness_shore_a,
-                   pf.process_type, pf.imaging_type, pf.surface_type,
-                   s.name as supplier_name
-            FROM plates p
-            JOIN plate_families pf ON p.plate_family_id = pf.id
-            JOIN suppliers s ON pf.supplier_id = s.id
-            WHERE {' AND '.join(conditions)}
-        """
-        
-        candidates = await conn.fetch(query, *params)
-        
-        scored = []
-        for cand in candidates:
-            score = 50
-            
-            if source['hardness_shore_a'] and cand['hardness_shore_a']:
-                hardness_diff = abs(source['hardness_shore_a'] - cand['hardness_shore_a'])
-                if hardness_diff <= 2:
-                    score += 30
-                elif hardness_diff <= 5:
-                    score += 20
-                elif hardness_diff <= 10:
-                    score += 10
-            
-            if source['process_type'] == cand['process_type']:
-                score += 25
-            
-            if source['imaging_type'] == cand['imaging_type']:
-                score += 15
-            
-            if source['surface_type'] == cand['surface_type']:
-                score += 10
-            
-            scored.append({
-                "id": str(cand['id']),
-                "display_name": cand['display_name'],
-                "supplier_name": cand['supplier_name'],
-                "thickness_mm": float(cand['thickness_mm']),
-                "hardness_shore": cand['hardness_shore_a'],
-                "process_type": cand['process_type'],
-                "match_score": min(score, 100),
-                "similarity_score": min(score, 100)
-            })
-        
-        scored.sort(key=lambda x: x['match_score'], reverse=True)
-        
-        return {
-            "source_plate": {
-                "id": str(source['id']),
-                "display_name": source['display_name'],
-                "supplier_name": source['supplier_name'],
-                "thickness_mm": float(source['thickness_mm'])
-            },
-            "equivalents": scored[:limit]
-        }
+    """Quick equivalency lookup - simpler endpoint for basic use"""
+    request = EquivalencyRequest(
+        source_plate_id=plate_id,
+        target_supplier=target_supplier
+    )
+    return await find_equivalents(request, conn)
 
-# ============================================================
-# EXPOSURE CALCULATOR ENDPOINT
-# ============================================================
+# ----------------------------------------------------------------------------
+# EXPOSURE CALCULATOR
+# ----------------------------------------------------------------------------
+
 @app.post("/api/exposure/calculate")
-async def calculate_exposure(data: ExposureCalculateRequest):
-    async with pool.acquire() as conn:
-        plate = await conn.fetchrow("""
-            SELECT p.*, pf.process_type
-            FROM plates p
-            JOIN plate_families pf ON p.plate_family_id = pf.id
-            WHERE p.id = $1
-        """, uuid.UUID(data.plate_id))
+async def calculate_exposure(
+    request: ExposureCalculation,
+    conn = Depends(get_db)
+):
+    """Calculate exposure times based on plate and current UV intensity"""
+    
+    # Get plate data
+    plate_query = """
+        SELECT 
+            p.display_name,
+            p.thickness_mm,
+            p.main_exposure_energy_min_mj_cm2,
+            p.main_exposure_energy_max_mj_cm2,
+            p.back_exposure_energy_min_mj_cm2,
+            p.back_exposure_energy_max_mj_cm2,
+            p.post_exposure_energy_mj_cm2,
+            p.detack_energy_mj_cm2,
+            p.relief_recommended_mm,
+            pf.family_name,
+            pf.process_type,
+            s.name as supplier_name
+        FROM plates p
+        JOIN plate_families pf ON p.plate_family_id = pf.id
+        JOIN suppliers s ON pf.supplier_id = s.id
+        WHERE p.id = $1::uuid
+    """
+    plate = await conn.fetchrow(plate_query, request.plate_id)
+    if not plate:
+        raise HTTPException(status_code=404, detail="Plate not found")
+    
+    plate = dict(plate)
+    intensity = request.current_intensity_mw_cm2
+    notes = []
+    
+    # Calculate exposure times: Time(s) = Energy(mJ/cm²) / Intensity(mW/cm²)
+    
+    # Main exposure
+    main_time = None
+    main_range = None
+    main_min_energy = plate.get('main_exposure_energy_min_mj_cm2')
+    main_max_energy = plate.get('main_exposure_energy_max_mj_cm2')
+    
+    if main_min_energy and main_max_energy:
+        main_min = to_float(main_min_energy) / intensity
+        main_max = to_float(main_max_energy) / intensity
+        main_time = (main_min + main_max) / 2  # Midpoint recommendation
+        main_range = (round(main_min, 1), round(main_max, 1))
+        notes.append(f"Main exposure based on {to_float(main_min_energy):.0f}-{to_float(main_max_energy):.0f} mJ/cm²")
+    
+    # Back exposure
+    back_time = None
+    back_range = None
+    back_min_energy = plate.get('back_exposure_energy_min_mj_cm2')
+    back_max_energy = plate.get('back_exposure_energy_max_mj_cm2')
+    
+    if back_min_energy and back_max_energy:
+        back_min = to_float(back_min_energy) / intensity
+        back_max = to_float(back_max_energy) / intensity
+        back_time = (back_min + back_max) / 2
+        back_range = (round(back_min, 1), round(back_max, 1))
         
-        if not plate:
-            raise HTTPException(status_code=404, detail="Plate not found")
-        
-        base_energy = plate.get('main_exposure_energy_mj_cm2') or 1000
-        back_energy = plate.get('back_exposure_energy_mj_cm2') or 200
-        
-        main_time_s = int((base_energy / data.current_intensity_mw_cm2) * 1000 / 60)
-        back_time_s = int((back_energy / data.current_intensity_mw_cm2) * 1000 / 60)
-        
-        main_time_s = max(30, min(main_time_s, 1800))
-        back_time_s = max(10, min(back_time_s, 600))
-        
-        return {
-            "plate": {
-                "id": str(plate['id']),
-                "display_name": plate['display_name'],
-                "thickness_mm": float(plate['thickness_mm'])
-            },
-            "input": {
-                "intensity_mw_cm2": data.current_intensity_mw_cm2
-            },
-            "exposure": {
-                "main_exposure_time_s": main_time_s,
-                "back_exposure_time_s": back_time_s,
-                "main_exposure_formatted": f"{main_time_s // 60}m {main_time_s % 60}s",
-                "back_exposure_formatted": f"{back_time_s // 60}m {back_time_s % 60}s"
-            }
+        # Adjust for target floor if specified
+        if request.target_floor_mm and plate.get('thickness_mm'):
+            plate_thickness = to_float(plate['thickness_mm'])
+            target_relief = plate_thickness - request.target_floor_mm
+            recommended_relief = to_float(plate.get('relief_recommended_mm') or (plate_thickness * 0.6))
+            if target_relief < recommended_relief:
+                # More floor = more back exposure
+                adjustment = 1 + (recommended_relief - target_relief) / recommended_relief * 0.2
+                back_time *= adjustment
+                notes.append(f"Back exposure adjusted for {request.target_floor_mm}mm floor target")
+    
+    # Post exposure
+    post_time = None
+    if plate.get('post_exposure_energy_mj_cm2'):
+        post_time = round(to_float(plate['post_exposure_energy_mj_cm2']) / intensity, 1)
+    
+    # Detack
+    detack_time = None
+    if plate.get('detack_energy_mj_cm2'):
+        detack_time = round(to_float(plate['detack_energy_mj_cm2']) / intensity, 1)
+    
+    # Add general notes
+    notes.append(f"Calculated at {intensity} mW/cm² measured intensity")
+    if plate.get('process_type') == 'thermal':
+        notes.append("Thermal plate - no solvent washout required")
+    
+    return {
+        'plate': {
+            'name': plate.get('display_name') or plate.get('family_name'),
+            'thickness_mm': to_float(plate['thickness_mm']),
+            'supplier': plate['supplier_name'],
+            'process_type': plate['process_type']
+        },
+        'exposure': {
+            'back_exposure_time_s': round(back_time, 1) if back_time else None,
+            'back_exposure_range_s': back_range,
+            'main_exposure_time_s': round(main_time, 1) if main_time else None,
+            'main_exposure_range_s': main_range,
+            'post_exposure_time_s': post_time,
+            'detack_time_s': detack_time
+        },
+        'notes': notes,
+        'input': {
+            'intensity_mw_cm2': intensity,
+            'target_floor_mm': request.target_floor_mm
         }
+    }
 
-# ============================================================
-# USER FAVORITE PLATES ENDPOINTS
-# ============================================================
-@app.get("/api/me/plates")
-async def get_my_plates(user: dict = Depends(get_current_user_required)):
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT ufp.id, ufp.plate_id, p.display_name, p.thickness_mm, 
-                   p.hardness_shore_a as hardness_shore,
-                   pf.process_type, pf.surface_type, s.name as supplier_name
-            FROM user_favorite_plates ufp
-            JOIN plates p ON ufp.plate_id = p.id
-            JOIN plate_families pf ON p.plate_family_id = pf.id
-            JOIN suppliers s ON pf.supplier_id = s.id
-            WHERE ufp.user_id = $1
-            ORDER BY s.name, p.display_name
-        """, user['id'])
-        
-        result = []
-        for row in rows:
-            r = dict(row)
-            r['id'] = str(r['id'])
-            r['plate_id'] = str(r['plate_id'])
-            result.append(r)
-        return result
+@app.get("/api/exposure/scale")
+async def scale_exposure_time(
+    reference_time_s: float,
+    reference_intensity: float,
+    current_intensity: float
+):
+    """Scale exposure time when lamp intensity changes"""
+    if current_intensity <= 0:
+        raise HTTPException(status_code=400, detail="Current intensity must be positive")
+    
+    # Lower intensity = longer time (inverse relationship)
+    scaled_time = reference_time_s * (reference_intensity / current_intensity)
+    
+    return {
+        'reference_time_s': reference_time_s,
+        'reference_intensity_mw_cm2': reference_intensity,
+        'current_intensity_mw_cm2': current_intensity,
+        'scaled_time_s': round(scaled_time, 1),
+        'intensity_change_percent': round((current_intensity - reference_intensity) / reference_intensity * 100, 1)
+    }
 
-@app.post("/api/me/plates/{plate_id}")
-async def add_favorite_plate(plate_id: str, user: dict = Depends(get_current_user_required)):
-    async with pool.acquire() as conn:
-        can_add, current, limit = await check_user_limit(conn, user['id'], 'plates')
-        if not can_add:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Plate limit reached ({current}/{limit}). Upgrade to premium for unlimited plates."
-            )
-        
-        await conn.execute("""
-            INSERT INTO user_favorite_plates (user_id, plate_id)
-            VALUES ($1, $2)
-            ON CONFLICT (user_id, plate_id) DO NOTHING
-        """, user['id'], uuid.UUID(plate_id))
-        return {"message": "Plate added to favorites"}
+# ----------------------------------------------------------------------------
+# EQUIPMENT
+# ----------------------------------------------------------------------------
 
-@app.delete("/api/me/plates/{plate_id}")
-async def remove_favorite_plate(plate_id: str, user: dict = Depends(get_current_user_required)):
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM user_favorite_plates WHERE user_id = $1 AND plate_id = $2",
-            user['id'], uuid.UUID(plate_id)
-        )
-        return {"message": "Plate removed from favorites"}
+@app.get("/api/equipment/models")
+async def list_equipment_models(
+    equipment_type: Optional[str] = None,
+    supplier: Optional[str] = None,
+    conn = Depends(get_db)
+):
+    """List equipment models"""
+    query = """
+        SELECT 
+            em.id::text,
+            em.model_name,
+            em.equipment_type,
+            em.technology,
+            em.uv_source_type,
+            em.nominal_intensity_mw_cm2,
+            em.has_integrated_back_exposure,
+            s.name as supplier_name
+        FROM equipment_models em
+        JOIN suppliers s ON em.supplier_id = s.id
+        WHERE ($1::text IS NULL OR em.equipment_type = $1)
+          AND ($2::text IS NULL OR s.name ILIKE $2)
+        ORDER BY s.name, em.model_name
+    """
+    rows = await conn.fetch(query, equipment_type, supplier)
+    return [dict(row) for row in rows]
 
-# ============================================================
-# USER EQUIPMENT ENDPOINTS
-# ============================================================
-@app.get("/api/me/equipment")
-async def get_my_equipment(user: dict = Depends(get_current_user_required)):
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT ue.id, ue.nickname, ue.lamp_install_date, ue.location, ue.is_primary,
-                   em.model_name, em.uv_source_type, em.nominal_intensity_mw_cm2,
-                   es.name as supplier_name
-            FROM user_equipment ue
-            JOIN equipment_models em ON ue.equipment_model_id = em.id
-            JOIN equipment_suppliers es ON em.supplier_id = es.id
-            WHERE ue.user_id = $1 AND ue.is_active = TRUE
-            ORDER BY ue.is_primary DESC, ue.nickname
-        """, user['id'])
-        
-        result = []
-        for row in rows:
-            r = dict(row)
-            r['id'] = str(r['id'])
-            
-            if r.get('lamp_install_date'):
-                age_days = (date.today() - r['lamp_install_date']).days
-                r['lamp_age_months'] = age_days // 30
-            else:
-                r['lamp_age_months'] = None
-            
-            result.append(r)
-        return result
+# ----------------------------------------------------------------------------
+# PLATE FAMILIES
+# ----------------------------------------------------------------------------
 
-@app.post("/api/me/equipment")
-async def add_my_equipment(data: EquipmentAdd, user: dict = Depends(get_current_user_required)):
-    async with pool.acquire() as conn:
-        can_add, current, limit = await check_user_limit(conn, user['id'], 'equipment')
-        if not can_add:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Equipment limit reached ({current}/{limit}). Upgrade to premium for unlimited equipment."
-            )
-        
-        equipment_id = uuid.uuid4()
-        
-        lamp_date = None
-        if data.lamp_install_date:
-            try:
-                lamp_date = datetime.strptime(data.lamp_install_date, "%Y-%m-%d").date()
-            except:
-                pass
-        
-        await conn.execute("""
-            INSERT INTO user_equipment (id, user_id, equipment_model_id, nickname, lamp_install_date, location, is_active)
-            VALUES ($1, $2, $3, $4, $5, $6, TRUE)
-        """, equipment_id, user['id'], uuid.UUID(data.equipment_model_id),
-            data.nickname, lamp_date, data.location)
-        
-        return {"id": str(equipment_id), "message": "Equipment added"}
+@app.get("/api/families")
+async def list_plate_families(
+    supplier: Optional[str] = None,
+    process_type: Optional[str] = None,
+    conn = Depends(get_db)
+):
+    """List plate families with plate counts"""
+    query = """
+        SELECT 
+            pf.id::text,
+            pf.family_name,
+            pf.process_type,
+            pf.technology_tags,
+            pf.description,
+            s.name as supplier_name,
+            COUNT(p.id) as plate_count
+        FROM plate_families pf
+        JOIN suppliers s ON pf.supplier_id = s.id
+        LEFT JOIN plates p ON p.plate_family_id = pf.id AND p.is_active = TRUE
+        WHERE ($1::text IS NULL OR s.name ILIKE $1)
+          AND ($2::text IS NULL OR pf.process_type = $2)
+        GROUP BY pf.id, pf.family_name, pf.process_type, pf.technology_tags, 
+                 pf.description, s.name
+        ORDER BY s.name, pf.family_name
+    """
+    rows = await conn.fetch(query, supplier, process_type)
+    return [dict(row) for row in rows]
 
-@app.delete("/api/me/equipment/{equipment_id}")
-async def remove_my_equipment(equipment_id: str, user: dict = Depends(get_current_user_required)):
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE user_equipment SET is_active = FALSE WHERE id = $1 AND user_id = $2",
-            uuid.UUID(equipment_id), user['id']
-        )
-        return {"message": "Equipment removed"}
 
-# ============================================================
-# EQUIPMENT MODELS ENDPOINT
-# ============================================================
-@app.get("/api/equipment-models")
-async def get_equipment_models(supplier: Optional[str] = None):
-    async with pool.acquire() as conn:
-        if supplier:
-            rows = await conn.fetch("""
-                SELECT em.*, es.name as supplier_name
-                FROM equipment_models em
-                JOIN equipment_suppliers es ON em.supplier_id = es.id
-                WHERE es.name = $1
-                ORDER BY em.model_name
-            """, supplier)
-        else:
-            rows = await conn.fetch("""
-                SELECT em.*, es.name as supplier_name
-                FROM equipment_models em
-                JOIN equipment_suppliers es ON em.supplier_id = es.id
-                ORDER BY es.name, em.model_name
-            """)
-        
-        result = []
-        for row in rows:
-            r = dict(row)
-            r['id'] = str(r['id'])
-            r['supplier_id'] = str(r['supplier_id'])
-            result.append(r)
-        return result
-
-@app.get("/api/equipment-suppliers")
-async def get_equipment_suppliers():
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT id, name FROM equipment_suppliers ORDER BY name")
-        return [{"id": str(r['id']), "name": r['name']} for r in rows]
-
-# ============================================================
-# USER RECIPES ENDPOINTS
-# ============================================================
-@app.get("/api/me/recipes")
-async def get_my_recipes(user: dict = Depends(get_current_user_required)):
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT sr.*, p.display_name as plate_name, s.name as supplier_name,
-                   ue.nickname as equipment_nickname
-            FROM saved_recipes sr
-            JOIN plates p ON sr.plate_id = p.id
-            JOIN plate_families pf ON p.plate_family_id = pf.id
-            JOIN suppliers s ON pf.supplier_id = s.id
-            LEFT JOIN user_equipment ue ON sr.equipment_id = ue.id
-            WHERE sr.user_id = $1 AND sr.is_active = TRUE
-            ORDER BY sr.created_at DESC
-        """, user['id'])
-        
-        result = []
-        for row in rows:
-            r = dict(row)
-            r['id'] = str(r['id'])
-            r['user_id'] = str(r['user_id'])
-            r['plate_id'] = str(r['plate_id'])
-            if r.get('equipment_id'):
-                r['equipment_id'] = str(r['equipment_id'])
-            result.append(r)
-        return result
-
-@app.post("/api/me/recipes")
-async def save_recipe(data: RecipeSave, user: dict = Depends(get_current_user_required)):
-    async with pool.acquire() as conn:
-        can_add, current, limit = await check_user_limit(conn, user['id'], 'recipes')
-        if not can_add:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Recipe limit reached ({current}/{limit}). Upgrade to premium for unlimited recipes."
-            )
-        
-        recipe_id = uuid.uuid4()
-        equipment_uuid = uuid.UUID(data.equipment_id) if data.equipment_id else None
-        
-        await conn.execute("""
-            INSERT INTO saved_recipes (id, user_id, name, plate_id, equipment_id,
-                main_exposure_time_s, back_exposure_time_s, customer_name, job_number, notes, is_active)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE)
-        """, recipe_id, user['id'], data.name, uuid.UUID(data.plate_id), equipment_uuid,
-            data.main_exposure_time_s, data.back_exposure_time_s,
-            data.customer_name, data.job_number, data.notes)
-        
-        return {"id": str(recipe_id), "message": "Recipe saved"}
-
-@app.delete("/api/me/recipes/{recipe_id}")
-async def delete_recipe(recipe_id: str, user: dict = Depends(get_current_user_required)):
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE saved_recipes SET is_active = FALSE WHERE id = $1 AND user_id = $2",
-            uuid.UUID(recipe_id), user['id']
-        )
-        return {"message": "Recipe deleted"}
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
