@@ -147,6 +147,15 @@ function Header() {
                           >
                             <span>🔧</span> My Equipment
                           </Link>
+                          <Link 
+                            href="/my-recipes"
+                            className={`flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-50 ${
+                              pathname === '/my-recipes' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'
+                            }`}
+                            onClick={() => setMenuOpen(false)}
+                          >
+                            <span>📝</span> Saved Recipes
+                          </Link>
                         </div>
                         
                         <div className="border-t border-gray-100 py-1">
@@ -223,6 +232,9 @@ function Header() {
                   </Link>
                   <Link href="/my-equipment" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2" onClick={() => setMenuOpen(false)}>
                     <span>🔧</span> My Equipment
+                  </Link>
+                  <Link href="/my-recipes" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2" onClick={() => setMenuOpen(false)}>
+                    <span>📝</span> Saved Recipes
                   </Link>
                   <hr className="my-2" />
                   <div className="px-3 py-2 text-sm text-gray-500">
