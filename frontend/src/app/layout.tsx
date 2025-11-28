@@ -1,67 +1,255 @@
-import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
-import './globals.css'
+'use client';
 
-const inter = Inter({ subsets: ['latin'] })
+// frontend/src/app/layout.tsx
+// ============================
+// Complete layout with navigation header
 
-export const metadata: Metadata = {
-  title: 'FlexoPlate IQ',
-  description: 'Plate Equivalency & Exposure Calculator',
-  viewport: 'width=device-width, initial-scale=1, maximum-scale=1',
+import './globals.css';
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+
+// Navigation Header Component
+function Header() {
+  const [user, setUser] = useState<any>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const pathname = usePathname();
+
+  useEffect(() => {
+    // Check for logged in user on mount
+    const storedUser = localStorage.getItem('flexoplate_user');
+    if (storedUser) {
+      try {
+        setUser(JSON.parse(storedUser));
+      } catch {
+        // Invalid JSON, clear it
+        localStorage.removeItem('flexoplate_user');
+        localStorage.removeItem('flexoplate_token');
+      }
+    }
+  }, []);
+
+  // Re-check on route change (in case user logged in/out)
+  useEffect(() => {
+    const storedUser = localStorage.getItem('flexoplate_user');
+    if (storedUser) {
+      try {
+        setUser(JSON.parse(storedUser));
+      } catch {
+        setUser(null);
+      }
+    } else {
+      setUser(null);
+    }
+  }, [pathname]);
+
+  const handleLogout = () => {
+    localStorage.removeItem('flexoplate_token');
+    localStorage.removeItem('flexoplate_user');
+    setUser(null);
+    setMenuOpen(false);
+    window.location.href = '/';
+  };
+
+  return (
+    <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
+      <div className="max-w-6xl mx-auto px-4">
+        <div className="flex items-center justify-between h-14">
+          {/* Logo */}
+          <Link href="/" className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-blue-500 rounded flex items-center justify-center">
+              <span className="text-white font-bold text-sm">FP</span>
+            </div>
+            <span className="font-semibold text-gray-900">FlexoPlate IQ</span>
+          </Link>
+
+          {/* Desktop Navigation */}
+          <nav className="hidden md:flex items-center gap-6">
+            <Link 
+              href="/" 
+              className={`text-sm ${pathname === '/' ? 'text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+            >
+              Home
+            </Link>
+            <Link 
+              href="/exposure" 
+              className={`text-sm ${pathname === '/exposure' ? 'text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+            >
+              Exposure Calculator
+            </Link>
+            <Link 
+              href="/plates" 
+              className={`text-sm ${pathname === '/plates' ? 'text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+            >
+              Plate Equivalency
+            </Link>
+
+            {user ? (
+              <>
+                <Link 
+                  href="/my-equipment" 
+                  className={`text-sm ${pathname === '/my-equipment' ? 'text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  My Equipment
+                </Link>
+                
+                {/* User dropdown */}
+                <div className="relative">
+                  <button
+                    onClick={() => setMenuOpen(!menuOpen)}
+                    className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+                  >
+                    <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center">
+                      <span className="text-gray-600 text-xs font-medium">
+                        {user.first_name?.[0] || user.email?.[0]?.toUpperCase() || 'U'}
+                      </span>
+                    </div>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  
+                  {menuOpen && (
+                    <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1">
+                      <div className="px-4 py-2 border-b border-gray-100">
+                        <p className="text-sm font-medium text-gray-900">
+                          {user.first_name || 'User'}
+                        </p>
+                        <p className="text-xs text-gray-500 truncate">{user.email}</p>
+                      </div>
+                      <Link 
+                        href="/my-equipment"
+                        className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                        onClick={() => setMenuOpen(false)}
+                      >
+                        My Equipment
+                      </Link>
+                      <button
+                        onClick={handleLogout}
+                        className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-50"
+                      >
+                        Logout
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <Link 
+                href="/login" 
+                className="bg-blue-500 hover:bg-blue-600 text-white text-sm px-4 py-2 rounded-lg"
+              >
+                Login
+              </Link>
+            )}
+          </nav>
+
+          {/* Mobile menu button */}
+          <button
+            className="md:hidden p-2"
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {menuOpen ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              )}
+            </svg>
+          </button>
+        </div>
+
+        {/* Mobile Navigation */}
+        {menuOpen && (
+          <nav className="md:hidden py-4 border-t border-gray-100">
+            <div className="flex flex-col gap-2">
+              <Link 
+                href="/"
+                className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded"
+                onClick={() => setMenuOpen(false)}
+              >
+                Home
+              </Link>
+              <Link 
+                href="/exposure"
+                className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded"
+                onClick={() => setMenuOpen(false)}
+              >
+                Exposure Calculator
+              </Link>
+              <Link 
+                href="/plates"
+                className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded"
+                onClick={() => setMenuOpen(false)}
+              >
+                Plate Equivalency
+              </Link>
+              
+              {user ? (
+                <>
+                  <Link 
+                    href="/my-equipment"
+                    className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    My Equipment
+                  </Link>
+                  <hr className="my-2" />
+                  <div className="px-2 py-2 text-sm text-gray-500">
+                    Signed in as {user.email}
+                  </div>
+                  <button
+                    onClick={handleLogout}
+                    className="px-2 py-2 text-left text-red-600 hover:bg-gray-50 rounded"
+                  >
+                    Logout
+                  </button>
+                </>
+              ) : (
+                <>
+                  <hr className="my-2" />
+                  <Link 
+                    href="/login"
+                    className="px-2 py-2 text-blue-600 hover:bg-gray-50 rounded"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    Login
+                  </Link>
+                  <Link 
+                    href="/register"
+                    className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    Create Account
+                  </Link>
+                </>
+              )}
+            </div>
+          </nav>
+        )}
+      </div>
+    </header>
+  );
 }
 
 export default function RootLayout({
   children,
 }: {
-  children: React.ReactNode
+  children: React.ReactNode;
 }) {
   return (
     <html lang="en">
-      <body className={inter.className}>
-        <div className="min-h-screen bg-gray-50">
-          {/* Header */}
-          <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-              <div className="flex justify-between items-center h-16">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-                    <span className="text-white font-bold text-sm">FP</span>
-                  </div>
-                  <div>
-                    <h1 className="text-lg font-semibold text-gray-900">FlexoPlate IQ</h1>
-                    <p className="text-xs text-gray-500 hidden sm:block">Plate Equivalency & Exposure Assistant</p>
-                  </div>
-                </div>
-                <nav className="flex gap-1">
-                  <a href="/" className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                    Equivalency
-                  </a>
-                  <a href="/exposure" className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                    Exposure
-                  </a>
-                  <a href="/plates" className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                    Plates
-                  </a>
-                </nav>
-              </div>
-            </div>
-          </header>
-          
-          {/* Main content */}
-          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            {children}
-          </main>
-          
-          {/* Footer */}
-          <footer className="bg-white border-t border-gray-200 mt-auto">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-              <p className="text-center text-sm text-gray-500">
-                FlexoPlate IQ v1.0 • Internal Tool
-              </p>
-            </div>
-          </footer>
-        </div>
+      <head>
+        <title>FlexoPlate IQ</title>
+        <meta name="description" content="Flexographic plate equivalency and exposure calculator" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+      </head>
+      <body className="bg-gray-50 min-h-screen">
+        <Header />
+        <main>
+          {children}
+        </main>
       </body>
     </html>
-  )
+  );
 }
