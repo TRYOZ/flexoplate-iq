@@ -1,35 +1,29 @@
 'use client';
 
 // frontend/src/app/layout.tsx
-// ============================
-// Complete layout with navigation header
 
 import './globals.css';
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
-// Navigation Header Component
 function Header() {
   const [user, setUser] = useState<any>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const pathname = usePathname();
 
   useEffect(() => {
-    // Check for logged in user on mount
     const storedUser = localStorage.getItem('flexoplate_user');
     if (storedUser) {
       try {
         setUser(JSON.parse(storedUser));
       } catch {
-        // Invalid JSON, clear it
         localStorage.removeItem('flexoplate_user');
         localStorage.removeItem('flexoplate_token');
       }
     }
   }, []);
 
-  // Re-check on route change (in case user logged in/out)
   useEffect(() => {
     const storedUser = localStorage.getItem('flexoplate_user');
     if (storedUser) {
@@ -63,13 +57,13 @@ function Header() {
             <span className="font-semibold text-gray-900">FlexoPlate IQ</span>
           </Link>
 
-          {/* Desktop Navigation */}
+          {/* Desktop Navigation - FIXED LABELS */}
           <nav className="hidden md:flex items-center gap-6">
             <Link 
               href="/" 
               className={`text-sm ${pathname === '/' ? 'text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
             >
-              Home
+              Plate Equivalency
             </Link>
             <Link 
               href="/exposure" 
@@ -81,7 +75,7 @@ function Header() {
               href="/plates" 
               className={`text-sm ${pathname === '/plates' ? 'text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
             >
-              Plate Equivalency
+              Plate Catalog
             </Link>
 
             {user ? (
@@ -93,7 +87,6 @@ function Header() {
                   My Equipment
                 </Link>
                 
-                {/* User dropdown */}
                 <div className="relative">
                   <button
                     onClick={() => setMenuOpen(!menuOpen)}
@@ -163,63 +156,36 @@ function Header() {
         {menuOpen && (
           <nav className="md:hidden py-4 border-t border-gray-100">
             <div className="flex flex-col gap-2">
-              <Link 
-                href="/"
-                className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded"
-                onClick={() => setMenuOpen(false)}
-              >
-                Home
+              <Link href="/" className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded" onClick={() => setMenuOpen(false)}>
+                Plate Equivalency
               </Link>
-              <Link 
-                href="/exposure"
-                className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded"
-                onClick={() => setMenuOpen(false)}
-              >
+              <Link href="/exposure" className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded" onClick={() => setMenuOpen(false)}>
                 Exposure Calculator
               </Link>
-              <Link 
-                href="/plates"
-                className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded"
-                onClick={() => setMenuOpen(false)}
-              >
-                Plate Equivalency
+              <Link href="/plates" className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded" onClick={() => setMenuOpen(false)}>
+                Plate Catalog
               </Link>
               
               {user ? (
                 <>
-                  <Link 
-                    href="/my-equipment"
-                    className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded"
-                    onClick={() => setMenuOpen(false)}
-                  >
+                  <Link href="/my-equipment" className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded" onClick={() => setMenuOpen(false)}>
                     My Equipment
                   </Link>
                   <hr className="my-2" />
                   <div className="px-2 py-2 text-sm text-gray-500">
                     Signed in as {user.email}
                   </div>
-                  <button
-                    onClick={handleLogout}
-                    className="px-2 py-2 text-left text-red-600 hover:bg-gray-50 rounded"
-                  >
+                  <button onClick={handleLogout} className="px-2 py-2 text-left text-red-600 hover:bg-gray-50 rounded">
                     Logout
                   </button>
                 </>
               ) : (
                 <>
                   <hr className="my-2" />
-                  <Link 
-                    href="/login"
-                    className="px-2 py-2 text-blue-600 hover:bg-gray-50 rounded"
-                    onClick={() => setMenuOpen(false)}
-                  >
+                  <Link href="/login" className="px-2 py-2 text-blue-600 hover:bg-gray-50 rounded" onClick={() => setMenuOpen(false)}>
                     Login
                   </Link>
-                  <Link 
-                    href="/register"
-                    className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded"
-                    onClick={() => setMenuOpen(false)}
-                  >
+                  <Link href="/register" className="px-2 py-2 text-gray-600 hover:bg-gray-50 rounded" onClick={() => setMenuOpen(false)}>
                     Create Account
                   </Link>
                 </>
@@ -246,7 +212,7 @@ export default function RootLayout({
       </head>
       <body className="bg-gray-50 min-h-screen">
         <Header />
-        <main>
+        <main className="max-w-6xl mx-auto p-4">
           {children}
         </main>
       </body>
