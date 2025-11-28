@@ -20,21 +20,23 @@ export interface Plate {
 
 export interface PlateEquivalent extends Plate {
   similarity_score: number;
+  match_score: number;
   match_notes: string[];
 }
 
 export interface EquivalencyResult {
   source_plate: Plate;
   equivalents: PlateEquivalent[];
-  total_candidates: number;
+  total_candidates?: number;
 }
 
 export interface Supplier {
   id: string;
   name: string;
-  website_url: string | null;
-  is_plate_supplier: boolean;
-  is_equipment_supplier: boolean;
+  website_url?: string | null;
+  country?: string | null;
+  is_plate_supplier?: boolean;
+  is_equipment_supplier?: boolean;
 }
 
 export interface ExposureResult {
@@ -53,7 +55,7 @@ export interface ExposureResult {
     detack_time_s: number | null;
   };
   notes: string[];
-  input: {
+  input?: {
     intensity_mw_cm2: number;
     target_floor_mm: number | null;
   };
@@ -91,7 +93,7 @@ class ApiClient {
 
   // Suppliers
   async getSuppliers(plateOnly = true): Promise<Supplier[]> {
-    return this.fetch(`/api/suppliers?plate_suppliers_only=${plateOnly}`);
+    return this.fetch(`/api/suppliers`);
   }
 
   // Plates
@@ -119,7 +121,7 @@ class ApiClient {
     return this.fetch(`/api/plates/${id}`);
   }
 
-  // Equivalency
+  // Equivalency - FIXED: Use GET instead of POST
   async findEquivalents(params: {
     source_plate_id: string;
     target_supplier?: string;
@@ -127,16 +129,18 @@ class ApiClient {
     ink_system?: string;
     application?: string;
   }): Promise<EquivalencyResult> {
-    return this.fetch('/api/equivalency/find', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
+    const searchParams = new URLSearchParams();
+    searchParams.set('plate_id', params.source_plate_id);
+    if (params.target_supplier) searchParams.set('target_supplier', params.target_supplier);
+    
+    // GET request with query parameters (not POST)
+    return this.fetch(`/api/equivalency/find?${searchParams}`);
   }
 
   async quickEquivalency(plateId: string, targetSupplier?: string): Promise<EquivalencyResult> {
     const params = new URLSearchParams({ plate_id: plateId });
     if (targetSupplier) params.set('target_supplier', targetSupplier);
-    return this.fetch(`/api/equivalency/quick?${params}`);
+    return this.fetch(`/api/equivalency/find?${params}`);
   }
 
   // Exposure calculator
