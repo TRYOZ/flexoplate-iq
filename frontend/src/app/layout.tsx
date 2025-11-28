@@ -50,7 +50,7 @@ function Header() {
       <div className="max-w-6xl mx-auto px-4">
         <div className="flex items-center justify-between h-14">
           {/* Logo */}
-          <Link href="/" className="flex items-center gap-2">
+          <Link href={user ? "/dashboard" : "/"} className="flex items-center gap-2">
             <div className="w-8 h-8 bg-blue-500 rounded flex items-center justify-center">
               <span className="text-white font-bold text-sm">FP</span>
             </div>
@@ -58,40 +58,47 @@ function Header() {
           </Link>
 
           {/* Desktop Navigation */}
-          <nav className="hidden md:flex items-center gap-6">
+          <nav className="hidden md:flex items-center gap-1">
+            {user && (
+              <Link 
+                href="/dashboard" 
+                className={`px-3 py-2 rounded-lg text-sm ${pathname === '/dashboard' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+              >
+                Dashboard
+              </Link>
+            )}
             <Link 
               href="/" 
-              className={`text-sm ${pathname === '/' ? 'text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+              className={`px-3 py-2 rounded-lg text-sm ${pathname === '/' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
             >
-              Plate Equivalency
+              Equivalency
             </Link>
             <Link 
               href="/exposure" 
-              className={`text-sm ${pathname === '/exposure' ? 'text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+              className={`px-3 py-2 rounded-lg text-sm ${pathname === '/exposure' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
             >
-              Exposure Calculator
+              Exposure
             </Link>
             <Link 
               href="/plates" 
-              className={`text-sm ${pathname === '/plates' ? 'text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+              className={`px-3 py-2 rounded-lg text-sm ${pathname === '/plates' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
             >
-              Plate Catalog
+              Catalog
             </Link>
 
             {user ? (
               <>
                 {/* User dropdown */}
-                <div className="relative">
+                <div className="relative ml-2">
                   <button
                     onClick={() => setMenuOpen(!menuOpen)}
-                    className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-50"
                   >
-                    <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                    <div className="w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center">
                       <span className="text-blue-600 text-xs font-medium">
                         {user.first_name?.[0] || user.email?.[0]?.toUpperCase() || 'U'}
                       </span>
                     </div>
-                    <span className="hidden lg:inline">{user.first_name || 'Account'}</span>
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
@@ -99,22 +106,29 @@ function Header() {
                   
                   {menuOpen && (
                     <>
-                      {/* Backdrop */}
-                      <div 
-                        className="fixed inset-0 z-10" 
-                        onClick={() => setMenuOpen(false)}
-                      />
-                      {/* Dropdown */}
+                      <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
                       <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
                         <div className="px-4 py-3 border-b border-gray-100">
                           <p className="text-sm font-medium text-gray-900">
                             {user.first_name ? `${user.first_name} ${user.last_name || ''}` : 'User'}
                           </p>
                           <p className="text-xs text-gray-500 truncate">{user.email}</p>
+                          {user.company?.name && (
+                            <p className="text-xs text-gray-400 mt-1">{user.company.name}</p>
+                          )}
                         </div>
                         
                         <div className="py-1">
                           <p className="px-4 py-1 text-xs font-medium text-gray-400 uppercase">My Workspace</p>
+                          <Link 
+                            href="/dashboard"
+                            className={`flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-50 ${
+                              pathname === '/dashboard' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'
+                            }`}
+                            onClick={() => setMenuOpen(false)}
+                          >
+                            <span>📊</span> Dashboard
+                          </Link>
                           <Link 
                             href="/my-plates"
                             className={`flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-50 ${
@@ -133,24 +147,14 @@ function Header() {
                           >
                             <span>🔧</span> My Equipment
                           </Link>
-                          <Link 
-                            href="/my-recipes"
-                            className={`flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-50 ${
-                              pathname === '/my-recipes' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'
-                            }`}
-                            onClick={() => setMenuOpen(false)}
-                          >
-                            <span>📝</span> Saved Recipes
-                            <span className="ml-auto text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">Soon</span>
-                          </Link>
                         </div>
                         
                         <div className="border-t border-gray-100 py-1">
                           <button
                             onClick={handleLogout}
-                            className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-50"
+                            className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-50 flex items-center gap-2"
                           >
-                            Logout
+                            <span>🚪</span> Logout
                           </button>
                         </div>
                       </div>
@@ -159,12 +163,20 @@ function Header() {
                 </div>
               </>
             ) : (
-              <Link 
-                href="/login" 
-                className="bg-blue-500 hover:bg-blue-600 text-white text-sm px-4 py-2 rounded-lg"
-              >
-                Login
-              </Link>
+              <div className="flex items-center gap-2 ml-2">
+                <Link 
+                  href="/login" 
+                  className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900"
+                >
+                  Login
+                </Link>
+                <Link 
+                  href="/register" 
+                  className="bg-blue-500 hover:bg-blue-600 text-white text-sm px-4 py-2 rounded-lg"
+                >
+                  Sign Up Free
+                </Link>
+              </div>
             )}
           </nav>
 
@@ -187,6 +199,11 @@ function Header() {
         {menuOpen && (
           <nav className="md:hidden py-4 border-t border-gray-100">
             <div className="flex flex-col gap-1">
+              {user && (
+                <Link href="/dashboard" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2" onClick={() => setMenuOpen(false)}>
+                  <span>📊</span> Dashboard
+                </Link>
+              )}
               <Link href="/" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg" onClick={() => setMenuOpen(false)}>
                 Plate Equivalency
               </Link>
@@ -209,7 +226,7 @@ function Header() {
                   </Link>
                   <hr className="my-2" />
                   <div className="px-3 py-2 text-sm text-gray-500">
-                    Signed in as {user.email}
+                    {user.email}
                   </div>
                   <button onClick={handleLogout} className="px-3 py-2 text-left text-red-600 hover:bg-gray-50 rounded-lg">
                     Logout
@@ -218,11 +235,11 @@ function Header() {
               ) : (
                 <>
                   <hr className="my-2" />
-                  <Link href="/login" className="px-3 py-2 text-blue-600 hover:bg-gray-50 rounded-lg" onClick={() => setMenuOpen(false)}>
+                  <Link href="/login" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg" onClick={() => setMenuOpen(false)}>
                     Login
                   </Link>
-                  <Link href="/register" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg" onClick={() => setMenuOpen(false)}>
-                    Create Account
+                  <Link href="/register" className="px-3 py-2 text-blue-600 font-medium hover:bg-gray-50 rounded-lg" onClick={() => setMenuOpen(false)}>
+                    Sign Up Free
                   </Link>
                 </>
               )}
@@ -242,14 +259,14 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <title>FlexoPlate IQ</title>
-        <meta name="description" content="Flexographic plate equivalency and exposure calculator" />
+        <title>FlexoPlate IQ - Plate Room Intelligence</title>
+        <meta name="description" content="Flexographic plate equivalency finder and exposure calculator. Find equivalent plates, calculate exposure times, and manage your plate room." />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
       </head>
       <body className="bg-gray-50 min-h-screen">
         <Header />
-        <main className="max-w-6xl mx-auto p-4">
+        <main>
           {children}
         </main>
         <footer className="border-t border-gray-200 mt-12 py-6 text-center text-sm text-gray-500">
