@@ -1,6 +1,10 @@
-# FlexoPlate IQ - Backend v4.0
+# FlexoPlate IQ - Backend v4.1
 # ============================
-# Built from actual database schema diagnostic
+# Fixed equivalency algorithm with stricter matching
+# - Surface type mismatch now PENALIZES score
+# - Excludes same supplier by default
+# - Only shows matches with score >= 50%
+# - Added match quality labels (Excellent/Good/Fair/Poor)
 
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +25,7 @@ except ImportError:
 # ============================================================
 # APP SETUP
 # ============================================================
-app = FastAPI(title="FlexoPlate IQ API", version="4.0.0")
+app = FastAPI(title="FlexoPlate IQ API", version="4.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -274,11 +278,24 @@ async def get_plate(plate_id: str):
 async def find_equivalent_plates(
     plate_id: str,
     target_supplier: Optional[str] = None,
-    limit: int = 10
+    exclude_same_supplier: bool = True,
+    limit: int = 20
 ):
+    """
+    Find equivalent plates from other suppliers.
+    
+    Scoring weights (100 point scale):
+    - Thickness match (within 0.05mm): 30 points
+    - Hardness match (within 2 Shore): 25 points  
+    - Surface type match: 25 points (CRITICAL - mismatch = -15)
+    - Imaging type match: 20 points
+    
+    100% = perfect match on all criteria
+    <70% = Not recommended as equivalent
+    """
     async with pool.acquire() as conn:
         source = await conn.fetchrow("""
-            SELECT p.*, s.name as supplier_name
+            SELECT p.*, s.name as supplier_name, s.id as supplier_id
             FROM plates p
             JOIN plate_families pf ON p.plate_family_id = pf.id
             JOIN suppliers s ON pf.supplier_id = s.id
@@ -292,20 +309,28 @@ async def find_equivalent_plates(
         params = [uuid.UUID(plate_id)]
         idx = 2
         
-        # Match by thickness
+        # MUST match by thickness (within 0.15mm tolerance for initial filter)
         if source['thickness_mm']:
-            conditions.append(f"ABS(p.thickness_mm - ${idx}) < 0.1")
+            conditions.append(f"ABS(p.thickness_mm - ${idx}) < 0.15")
             params.append(source['thickness_mm'])
             idx += 1
         
+        # Exclude same supplier by default (we want alternatives!)
+        if exclude_same_supplier and source['supplier_id']:
+            conditions.append(f"pf.supplier_id != ${idx}")
+            params.append(source['supplier_id'])
+            idx += 1
+        
+        # Filter by target supplier if specified
         if target_supplier:
-            conditions.append(f"s.name = ${idx}")
-            params.append(target_supplier)
+            conditions.append(f"LOWER(s.name) LIKE ${idx}")
+            params.append(f"%{target_supplier.lower()}%")
             idx += 1
         
         query = f"""
             SELECT p.id, p.display_name, p.thickness_mm, p.hardness_shore,
-                   p.imaging_type, p.surface_type, s.name as supplier_name
+                   p.imaging_type, p.surface_type, s.name as supplier_name,
+                   p.min_lpi, p.max_lpi
             FROM plates p
             JOIN plate_families pf ON p.plate_family_id = pf.id
             JOIN suppliers s ON pf.supplier_id = s.id
@@ -316,22 +341,91 @@ async def find_equivalent_plates(
         
         scored = []
         for cand in candidates:
-            score = 50
+            score = 0
+            match_details = []
             
-            # Hardness matching
+            # 1. THICKNESS (30 points) - Most critical
+            if source['thickness_mm'] and cand['thickness_mm']:
+                diff = abs(float(source['thickness_mm']) - float(cand['thickness_mm']))
+                if diff <= 0.02:
+                    score += 30
+                    match_details.append("thickness: exact")
+                elif diff <= 0.05:
+                    score += 25
+                    match_details.append("thickness: close")
+                elif diff <= 0.10:
+                    score += 15
+                    match_details.append("thickness: acceptable")
+                else:
+                    score += 5
+                    match_details.append("thickness: different")
+            
+            # 2. HARDNESS (25 points)
             if source['hardness_shore'] and cand['hardness_shore']:
                 diff = abs(float(source['hardness_shore']) - float(cand['hardness_shore']))
-                if diff <= 2: score += 30
-                elif diff <= 5: score += 20
-                elif diff <= 10: score += 10
+                if diff <= 1:
+                    score += 25
+                    match_details.append("hardness: exact")
+                elif diff <= 3:
+                    score += 20
+                    match_details.append("hardness: close")
+                elif diff <= 5:
+                    score += 12
+                    match_details.append("hardness: acceptable")
+                elif diff <= 8:
+                    score += 5
+                    match_details.append("hardness: different")
+                else:
+                    match_details.append("hardness: mismatch")
+            else:
+                # Unknown hardness - partial credit
+                score += 10
+                match_details.append("hardness: unknown")
             
-            # Imaging type matching
-            if source['imaging_type'] == cand['imaging_type']:
-                score += 25
+            # 3. SURFACE TYPE (25 points) - CRITICAL for print quality
+            source_surface = (source['surface_type'] or '').lower().strip()
+            cand_surface = (cand['surface_type'] or '').lower().strip()
             
-            # Surface type matching
-            if source['surface_type'] == cand['surface_type']:
-                score += 15
+            if source_surface and cand_surface:
+                if source_surface == cand_surface:
+                    score += 25
+                    match_details.append("surface: match")
+                else:
+                    # PENALTY for surface mismatch - this is critical!
+                    score -= 10
+                    match_details.append(f"surface: MISMATCH ({source_surface} vs {cand_surface})")
+            else:
+                score += 10  # Unknown - partial credit
+                match_details.append("surface: unknown")
+            
+            # 4. IMAGING TYPE (20 points)
+            source_imaging = (source['imaging_type'] or '').lower().strip()
+            cand_imaging = (cand['imaging_type'] or '').lower().strip()
+            
+            if source_imaging and cand_imaging:
+                if source_imaging == cand_imaging:
+                    score += 20
+                    match_details.append("imaging: match")
+                else:
+                    # Digital vs Analog is a significant difference
+                    score -= 5
+                    match_details.append(f"imaging: MISMATCH")
+            else:
+                score += 8
+                match_details.append("imaging: unknown")
+            
+            # Clamp score between 0 and 100
+            final_score = max(0, min(100, score))
+            
+            # Determine quality label
+            if final_score >= 90:
+                quality = "Excellent"
+            elif final_score >= 75:
+                quality = "Good"
+            elif final_score >= 60:
+                quality = "Fair"
+            else:
+                quality = "Poor"
             
             scored.append({
                 "id": str(cand['id']),
@@ -341,20 +435,33 @@ async def find_equivalent_plates(
                 "hardness_shore": float(cand['hardness_shore']) if cand['hardness_shore'] else None,
                 "imaging_type": cand['imaging_type'],
                 "surface_type": cand['surface_type'],
-                "match_score": min(score, 100),
-                "similarity_score": min(score, 100)
+                "min_lpi": cand['min_lpi'],
+                "max_lpi": cand['max_lpi'],
+                "match_score": final_score,
+                "similarity_score": final_score,
+                "match_quality": quality,
+                "match_details": match_details
             })
         
+        # Sort by score descending
         scored.sort(key=lambda x: x['match_score'], reverse=True)
+        
+        # Only return plates with score >= 50 (at least "Fair" matches)
+        good_matches = [s for s in scored if s['match_score'] >= 50]
         
         return {
             "source_plate": {
                 "id": str(source['id']),
                 "display_name": source['display_name'],
                 "supplier_name": source['supplier_name'],
-                "thickness_mm": float(source['thickness_mm']) if source['thickness_mm'] else None
+                "thickness_mm": float(source['thickness_mm']) if source['thickness_mm'] else None,
+                "hardness_shore": float(source['hardness_shore']) if source['hardness_shore'] else None,
+                "imaging_type": source['imaging_type'],
+                "surface_type": source['surface_type']
             },
-            "equivalents": scored[:limit]
+            "equivalents": good_matches[:limit],
+            "total_candidates": len(scored),
+            "good_matches_count": len(good_matches)
         }
 
 # ============================================================
