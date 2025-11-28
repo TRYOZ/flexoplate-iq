@@ -526,8 +526,12 @@ async def remove_my_equipment(equipment_id: str, user: dict = Depends(get_curren
         return {"message": "Equipment removed"}
 
 # ============================================================
-# EQUIPMENT MODELS
+# EQUIPMENT MODELS (both endpoint paths for compatibility)
 # ============================================================
+@app.get("/api/equipment/models")
+async def get_equipment_models_alt():
+    return await get_equipment_models()
+
 @app.get("/api/equipment-models")
 async def get_equipment_models():
     async with pool.acquire() as conn:
