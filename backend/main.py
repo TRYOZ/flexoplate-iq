@@ -1,10 +1,10 @@
-# FlexoPlate IQ - Backend v4.1
+# FlexoPlate IQ - Backend v4.2
 # ============================
-# Fixed equivalency algorithm with stricter matching
-# - Surface type mismatch now PENALIZES score
-# - Excludes same supplier by default
-# - Only shows matches with score >= 50%
-# - Added match quality labels (Excellent/Good/Fair/Poor)
+# Added enhanced plate fields:
+# - tonal_range, recommended_lpi, max_imager_dpi
+# - flat_top_technology, engineered_surface, led_optimized
+# - key_differentiators, substrate_detail, product_sheet_url
+# - region_availability, plate_generation
 
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,7 +25,7 @@ except ImportError:
 # ============================================================
 # APP SETUP
 # ============================================================
-app = FastAPI(title="FlexoPlate IQ API", version="4.1.0")
+app = FastAPI(title="FlexoPlate IQ API", version="4.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -140,7 +140,7 @@ async def get_current_user_required(credentials: HTTPAuthorizationCredentials = 
 # ============================================================
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "FlexoPlate IQ API", "version": "4.0.0"}
+    return {"status": "ok", "service": "FlexoPlate IQ API", "version": "4.2.0"}
 
 # ============================================================
 # AUTH ENDPOINTS
@@ -195,14 +195,17 @@ async def get_suppliers():
         return [{"id": str(r['id']), "name": r['name']} for r in rows]
 
 # ============================================================
-# PLATES - Using actual schema columns
-# Columns: id, plate_family_id, display_name, thickness_mm, hardness_shore, 
-#          imaging_type, surface_type, is_active, etc.
+# PLATES - ENHANCED with new fields
 # ============================================================
 @app.get("/api/plates")
 async def get_plates(
     supplier: Optional[str] = None,
     thickness: Optional[float] = None,
+    process_type: Optional[str] = None,
+    surface_type: Optional[str] = None,
+    led_optimized: Optional[bool] = None,
+    flat_top_only: Optional[bool] = None,
+    has_product_sheet: Optional[bool] = None,
     limit: int = 200
 ):
     async with pool.acquire() as conn:
@@ -220,10 +223,35 @@ async def get_plates(
             params.append(thickness)
             idx += 1
         
+        if process_type:
+            conditions.append(f"pf.process_type = ${idx}")
+            params.append(process_type)
+            idx += 1
+        
+        if surface_type:
+            conditions.append(f"p.surface_type = ${idx}")
+            params.append(surface_type)
+            idx += 1
+        
+        if led_optimized:
+            conditions.append("p.led_optimized = TRUE")
+        
+        if flat_top_only:
+            conditions.append("p.flat_top_technology IS NOT NULL")
+        
+        if has_product_sheet:
+            conditions.append("p.product_sheet_url IS NOT NULL")
+        
         query = f"""
             SELECT p.id, p.display_name, p.thickness_mm, p.hardness_shore,
-                   p.imaging_type, p.surface_type,
-                   pf.family_name, s.name as supplier_name
+                   p.imaging_type, p.surface_type, p.min_lpi, p.max_lpi,
+                   p.ink_compatibility, p.applications,
+                   p.tonal_range_min_pct, p.tonal_range_max_pct,
+                   p.recommended_lpi, p.max_imager_dpi,
+                   p.flat_top_technology, p.engineered_surface, p.led_optimized,
+                   p.key_differentiators, p.substrate_detail, p.product_sheet_url,
+                   p.region_availability, p.plate_generation,
+                   pf.family_name, pf.process_type, s.name as supplier_name
             FROM plates p
             JOIN plate_families pf ON p.plate_family_id = pf.id
             JOIN suppliers s ON pf.supplier_id = s.id
@@ -243,10 +271,27 @@ async def get_plates(
                 "hardness_shore": float(r['hardness_shore']) if r['hardness_shore'] else None,
                 "imaging_type": r['imaging_type'],
                 "surface_type": r['surface_type'],
+                "min_lpi": r['min_lpi'],
+                "max_lpi": r['max_lpi'],
+                "ink_compatibility": r['ink_compatibility'] or [],
+                "applications": r['applications'] or [],
+                # NEW FIELDS
+                "tonal_range_min_pct": float(r['tonal_range_min_pct']) if r['tonal_range_min_pct'] else None,
+                "tonal_range_max_pct": float(r['tonal_range_max_pct']) if r['tonal_range_max_pct'] else None,
+                "recommended_lpi": r['recommended_lpi'],
+                "max_imager_dpi": r['max_imager_dpi'],
+                "flat_top_technology": r['flat_top_technology'],
+                "engineered_surface": r['engineered_surface'] or False,
+                "led_optimized": r['led_optimized'] or False,
+                "key_differentiators": r['key_differentiators'] or [],
+                "substrate_detail": r['substrate_detail'],
+                "product_sheet_url": r['product_sheet_url'],
+                "region_availability": r['region_availability'] or [],
+                "plate_generation": r['plate_generation'] or 'current',
+                # Family info
                 "family_name": r['family_name'],
+                "process_type": r['process_type'] or r['imaging_type'],
                 "supplier_name": r['supplier_name'],
-                # For frontend compatibility
-                "process_type": r['imaging_type']
             })
         return result
 
@@ -254,7 +299,7 @@ async def get_plates(
 async def get_plate(plate_id: str):
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT p.*, pf.family_name, s.name as supplier_name
+            SELECT p.*, pf.family_name, pf.process_type, s.name as supplier_name, s.website as supplier_website
             FROM plates p
             JOIN plate_families pf ON p.plate_family_id = pf.id
             JOIN suppliers s ON pf.supplier_id = s.id
@@ -264,12 +309,37 @@ async def get_plate(plate_id: str):
         if not row:
             raise HTTPException(status_code=404, detail="Plate not found")
         
-        result = dict(row)
-        result['id'] = str(result['id'])
-        result['plate_family_id'] = str(result['plate_family_id'])
-        if result.get('organization_id'):
-            result['organization_id'] = str(result['organization_id'])
-        return result
+        return {
+            "id": str(row['id']),
+            "sku_code": row['sku_code'],
+            "display_name": row['display_name'],
+            "thickness_mm": float(row['thickness_mm']) if row['thickness_mm'] else None,
+            "hardness_shore": float(row['hardness_shore']) if row['hardness_shore'] else None,
+            "imaging_type": row['imaging_type'],
+            "surface_type": row['surface_type'],
+            "min_lpi": row['min_lpi'],
+            "max_lpi": row['max_lpi'],
+            "ink_compatibility": row['ink_compatibility'] or [],
+            "applications": row['applications'] or [],
+            # NEW FIELDS
+            "tonal_range_min_pct": float(row['tonal_range_min_pct']) if row['tonal_range_min_pct'] else None,
+            "tonal_range_max_pct": float(row['tonal_range_max_pct']) if row['tonal_range_max_pct'] else None,
+            "recommended_lpi": row['recommended_lpi'],
+            "max_imager_dpi": row['max_imager_dpi'],
+            "flat_top_technology": row['flat_top_technology'],
+            "engineered_surface": row['engineered_surface'] or False,
+            "led_optimized": row['led_optimized'] or False,
+            "key_differentiators": row['key_differentiators'] or [],
+            "substrate_detail": row['substrate_detail'],
+            "product_sheet_url": row['product_sheet_url'],
+            "region_availability": row['region_availability'] or [],
+            "plate_generation": row['plate_generation'] or 'current',
+            # Family info
+            "family_name": row['family_name'],
+            "process_type": row['process_type'] or row['imaging_type'],
+            "supplier_name": row['supplier_name'],
+            "supplier_website": row['supplier_website'],
+        }
 
 # ============================================================
 # EQUIVALENCY
@@ -330,7 +400,9 @@ async def find_equivalent_plates(
         query = f"""
             SELECT p.id, p.display_name, p.thickness_mm, p.hardness_shore,
                    p.imaging_type, p.surface_type, s.name as supplier_name,
-                   p.min_lpi, p.max_lpi
+                   p.min_lpi, p.max_lpi,
+                   p.flat_top_technology, p.led_optimized, p.engineered_surface,
+                   p.product_sheet_url
             FROM plates p
             JOIN plate_families pf ON p.plate_family_id = pf.id
             JOIN suppliers s ON pf.supplier_id = s.id
@@ -437,6 +509,10 @@ async def find_equivalent_plates(
                 "surface_type": cand['surface_type'],
                 "min_lpi": cand['min_lpi'],
                 "max_lpi": cand['max_lpi'],
+                "flat_top_technology": cand['flat_top_technology'],
+                "led_optimized": cand['led_optimized'] or False,
+                "engineered_surface": cand['engineered_surface'] or False,
+                "product_sheet_url": cand['product_sheet_url'],
                 "match_score": final_score,
                 "similarity_score": final_score,
                 "match_quality": quality,
@@ -519,7 +595,8 @@ async def get_my_plates(user: dict = Depends(get_current_user_required)):
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT ufp.id, ufp.plate_id, p.display_name, p.thickness_mm, p.hardness_shore,
-                   p.imaging_type, p.surface_type, s.name as supplier_name
+                   p.imaging_type, p.surface_type, s.name as supplier_name,
+                   p.product_sheet_url, p.flat_top_technology, p.led_optimized
             FROM user_favorite_plates ufp
             JOIN plates p ON ufp.plate_id = p.id
             JOIN plate_families pf ON p.plate_family_id = pf.id
@@ -539,7 +616,10 @@ async def get_my_plates(user: dict = Depends(get_current_user_required)):
                 "imaging_type": r['imaging_type'],
                 "surface_type": r['surface_type'],
                 "supplier_name": r['supplier_name'],
-                "process_type": r['imaging_type']
+                "process_type": r['imaging_type'],
+                "product_sheet_url": r['product_sheet_url'],
+                "flat_top_technology": r['flat_top_technology'],
+                "led_optimized": r['led_optimized'] or False
             })
         return result
 
@@ -567,7 +647,6 @@ async def remove_favorite_plate(plate_id: str, user: dict = Depends(get_current_
 
 # ============================================================
 # USER EQUIPMENT
-# Columns: id, user_id, equipment_model_id, nickname, location, lamp_install_date, is_active, is_primary
 # ============================================================
 @app.get("/api/me/equipment")
 async def get_my_equipment(user: dict = Depends(get_current_user_required)):
@@ -633,7 +712,7 @@ async def remove_my_equipment(equipment_id: str, user: dict = Depends(get_curren
         return {"message": "Equipment removed"}
 
 # ============================================================
-# EQUIPMENT MODELS (both endpoint paths for compatibility)
+# EQUIPMENT MODELS
 # ============================================================
 @app.get("/api/equipment/models")
 async def get_equipment_models_alt():
@@ -785,5 +864,50 @@ async def get_my_limits(user: dict = Depends(get_current_user_required)):
                 "plates": {"used": counts['plates_count'], "limit": max_p, "remaining": max(0, max_p - counts['plates_count'])},
                 "equipment": {"used": counts['equipment_count'], "limit": max_e, "remaining": max(0, max_e - counts['equipment_count'])},
                 "recipes": {"used": counts['recipes_count'], "limit": max_r, "remaining": max(0, max_r - counts['recipes_count'])}
+            }
+        }
+
+# ============================================================
+# FILTER OPTIONS ENDPOINT
+# ============================================================
+@app.get("/api/filters")
+async def get_filter_options():
+    """Get available filter options for UI dropdowns"""
+    async with pool.acquire() as conn:
+        suppliers = await conn.fetch("SELECT DISTINCT name FROM suppliers ORDER BY name")
+        process_types = await conn.fetch("SELECT DISTINCT process_type FROM plate_families WHERE process_type IS NOT NULL ORDER BY process_type")
+        surface_types = await conn.fetch("SELECT DISTINCT surface_type FROM plates WHERE surface_type IS NOT NULL ORDER BY surface_type")
+        
+        # Get unique ink types from arrays
+        ink_types = await conn.fetch("""
+            SELECT DISTINCT unnest(ink_compatibility) as ink_type 
+            FROM plates 
+            WHERE ink_compatibility IS NOT NULL
+            ORDER BY ink_type
+        """)
+        
+        # Get unique applications from arrays
+        applications = await conn.fetch("""
+            SELECT DISTINCT unnest(applications) as application 
+            FROM plates 
+            WHERE applications IS NOT NULL
+            ORDER BY application
+        """)
+        
+        # Get thickness range
+        thickness_range = await conn.fetchrow("""
+            SELECT MIN(thickness_mm) as min_thickness, MAX(thickness_mm) as max_thickness
+            FROM plates WHERE thickness_mm IS NOT NULL
+        """)
+        
+        return {
+            "suppliers": [r["name"] for r in suppliers],
+            "process_types": [r["process_type"] for r in process_types],
+            "surface_types": [r["surface_type"] for r in surface_types],
+            "ink_types": [r["ink_type"] for r in ink_types],
+            "applications": [r["application"] for r in applications],
+            "thickness_range": {
+                "min": float(thickness_range["min_thickness"]) if thickness_range["min_thickness"] else 0.76,
+                "max": float(thickness_range["max_thickness"]) if thickness_range["max_thickness"] else 7.00
             }
         }
