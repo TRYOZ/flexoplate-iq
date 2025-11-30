@@ -2,84 +2,121 @@
 
 // frontend/src/app/dashboard/page.tsx
 // =====================================
-// Uses AuthContext for authentication
+// Fixed dashboard with correct data fetching
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useAuth } from '../../context/AuthContext';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
 
+interface User {
+  id: string;
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  company_name?: string;
+}
+
 interface Equipment {
   id: string;
-  name: string;
-  model: string;
-  lamp_install_date: string;
-  lamp_age_days: number;
+  nickname?: string;
+  name?: string;
+  model_name?: string;
+  supplier_name?: string;
+  lamp_age_days?: number;
+  lamp_age_months?: number;
 }
 
 interface FavoritePlate {
   id: string;
-  plate_id: string;
-  plate_name: string;
-  supplier: string;
+  plate_id?: string;
+  plate_name?: string;
+  name?: string;
+  supplier?: string;
+  supplier_name?: string;
 }
 
 interface Recipe {
   id: string;
-  name: string;
-  plate_name: string;
-  created_at: string;
+  name?: string;
+  recipe_name?: string;
+  plate_name?: string;
+  created_at?: string;
 }
 
 export default function DashboardPage() {
-  const router = useRouter();
-  const { user, token, isLoading, isAuthenticated } = useAuth();
+  const [mounted, setMounted] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [favorites, setFavorites] = useState<FavoritePlate[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [dataLoaded, setDataLoaded] = useState(false);
 
-  // Redirect if not authenticated
+  // Mount check
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      router.push('/login');
-    }
-  }, [isLoading, isAuthenticated, router]);
+    setMounted(true);
+  }, []);
 
-  // Fetch dashboard data once authenticated
+  // Auth check after mount
   useEffect(() => {
-    if (!token || !isAuthenticated) return;
+    if (!mounted) return;
 
-    const fetchDashboardData = async () => {
+    const storedToken = localStorage.getItem('flexoplate_token');
+    const storedUser = localStorage.getItem('flexoplate_user');
+    
+    if (storedToken && storedUser) {
       try {
-        // Fetch user's equipment
-        const equipmentRes = await fetch(`${API_BASE}/api/me/equipment`, {
+        setToken(storedToken);
+        setUser(JSON.parse(storedUser));
+      } catch {
+        localStorage.removeItem('flexoplate_token');
+        localStorage.removeItem('flexoplate_user');
+        window.location.href = '/login';
+      }
+    } else {
+      window.location.href = '/login';
+    }
+  }, [mounted]);
+
+  // Fetch dashboard data
+  useEffect(() => {
+    if (!token) return;
+
+    const fetchData = async () => {
+      try {
+        // Fetch equipment
+        const eqRes = await fetch(`${API_BASE}/api/me/equipment`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
-        if (equipmentRes.ok) {
-          const data = await equipmentRes.json();
-          setEquipment(data.equipment || data || []);
+        if (eqRes.ok) {
+          const data = await eqRes.json();
+          console.log('Equipment data:', data);
+          const eqArray = Array.isArray(data) ? data : data.equipment || [];
+          setEquipment(eqArray);
         }
 
         // Fetch favorite plates
-        const favoritesRes = await fetch(`${API_BASE}/api/me/plates`, {
+        const favRes = await fetch(`${API_BASE}/api/me/plates`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
-        if (favoritesRes.ok) {
-          const data = await favoritesRes.json();
-          setFavorites(data.plates || data || []);
+        if (favRes.ok) {
+          const data = await favRes.json();
+          console.log('Favorites data:', data);
+          const favArray = Array.isArray(data) ? data : data.plates || [];
+          setFavorites(favArray);
         }
 
-        // Fetch saved recipes
-        const recipesRes = await fetch(`${API_BASE}/api/me/recipes`, {
+        // Fetch recipes
+        const recRes = await fetch(`${API_BASE}/api/me/recipes`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
-        if (recipesRes.ok) {
-          const data = await recipesRes.json();
-          setRecipes(data.recipes || data || []);
+        if (recRes.ok) {
+          const data = await recRes.json();
+          console.log('Recipes data:', data);
+          const recArray = Array.isArray(data) ? data : data.recipes || [];
+          setRecipes(recArray);
         }
 
       } catch (error) {
@@ -89,23 +126,11 @@ export default function DashboardPage() {
       }
     };
 
-    fetchDashboardData();
-  }, [token, isAuthenticated]);
+    fetchData();
+  }, [token]);
 
-  // Show loading while checking auth
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Don't render if not authenticated (redirect is happening)
-  if (!isAuthenticated || !user) {
+  // Loading state
+  if (!mounted || !user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
@@ -116,20 +141,18 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-6xl mx-auto px-4 py-8">
-        {/* Welcome Header */}
+        {/* Welcome */}
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-gray-900">
             Welcome back{user.first_name ? `, ${user.first_name}` : ''}!
           </h1>
-          <p className="text-gray-600 mt-1">
-            {user.company_name || 'Your FlexoPlate IQ Dashboard'}
-          </p>
+          <p className="text-gray-600 mt-1">Your FlexoPlate IQ Dashboard</p>
         </div>
 
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           <Link 
-            href="/"
+            href="/equivalency"
             className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all"
           >
             <div className="flex items-center gap-4">
@@ -197,20 +220,28 @@ export default function DashboardPage() {
               </div>
             ) : equipment.length > 0 ? (
               <div className="space-y-3">
-                {equipment.slice(0, 3).map((eq) => (
-                  <div key={eq.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div>
-                      <p className="font-medium text-gray-900">{eq.name}</p>
-                      <p className="text-sm text-gray-500">{eq.model}</p>
+                {equipment.slice(0, 3).map((eq) => {
+                  const name = eq.nickname || eq.name || eq.model_name || 'Equipment';
+                  const model = eq.model_name || eq.supplier_name || '';
+                  const days = eq.lamp_age_days ?? (eq.lamp_age_months ? eq.lamp_age_months * 30 : null);
+                  
+                  return (
+                    <div key={eq.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div>
+                        <p className="font-medium text-gray-900">{name}</p>
+                        {model && <p className="text-sm text-gray-500">{model}</p>}
+                      </div>
+                      {days !== null && (
+                        <div className="text-right">
+                          <p className={`text-sm font-medium ${days > 365 ? 'text-red-600' : days > 180 ? 'text-yellow-600' : 'text-green-600'}`}>
+                            {days} days
+                          </p>
+                          <p className="text-xs text-gray-500">lamp age</p>
+                        </div>
+                      )}
                     </div>
-                    <div className="text-right">
-                      <p className={`text-sm font-medium ${eq.lamp_age_days > 1000 ? 'text-red-600' : eq.lamp_age_days > 500 ? 'text-yellow-600' : 'text-green-600'}`}>
-                        {eq.lamp_age_days} days
-                      </p>
-                      <p className="text-xs text-gray-500">lamp age</p>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="text-center py-8 text-gray-500">
@@ -236,19 +267,24 @@ export default function DashboardPage() {
               </div>
             ) : favorites.length > 0 ? (
               <div className="space-y-3">
-                {favorites.slice(0, 4).map((fav) => (
-                  <div key={fav.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div>
-                      <p className="font-medium text-gray-900">{fav.plate_name}</p>
-                      <p className="text-sm text-gray-500">{fav.supplier}</p>
+                {favorites.slice(0, 4).map((fav) => {
+                  const name = fav.plate_name || fav.name || 'Plate';
+                  const supplier = fav.supplier || fav.supplier_name || '';
+                  
+                  return (
+                    <div key={fav.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div>
+                        <p className="font-medium text-gray-900">{name}</p>
+                        {supplier && <p className="text-sm text-gray-500">{supplier}</p>}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="text-center py-8 text-gray-500">
                 <p>No favorite plates yet</p>
-                <Link href="/" className="text-blue-600 hover:text-blue-700 text-sm mt-2 inline-block">
+                <Link href="/my-plates" className="text-blue-600 hover:text-blue-700 text-sm mt-2 inline-block">
                   Browse plates and add favorites →
                 </Link>
               </div>
@@ -269,15 +305,21 @@ export default function DashboardPage() {
               </div>
             ) : recipes.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {recipes.slice(0, 6).map((recipe) => (
-                  <div key={recipe.id} className="p-4 bg-gray-50 rounded-lg">
-                    <p className="font-medium text-gray-900">{recipe.name}</p>
-                    <p className="text-sm text-gray-500">{recipe.plate_name}</p>
-                    <p className="text-xs text-gray-400 mt-2">
-                      {new Date(recipe.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                ))}
+                {recipes.slice(0, 6).map((recipe) => {
+                  const name = recipe.name || recipe.recipe_name || 'Recipe';
+                  
+                  return (
+                    <div key={recipe.id} className="p-4 bg-gray-50 rounded-lg">
+                      <p className="font-medium text-gray-900">{name}</p>
+                      {recipe.plate_name && <p className="text-sm text-gray-500">{recipe.plate_name}</p>}
+                      {recipe.created_at && (
+                        <p className="text-xs text-gray-400 mt-2">
+                          {new Date(recipe.created_at).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <div className="text-center py-8 text-gray-500">
