@@ -2,74 +2,55 @@
 
 // frontend/src/app/login/page.tsx
 // ================================
-// FIXED v2: Uses window.location to prevent redirect loops
+// Uses AuthContext for login
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
+import { useAuth } from '../../context/AuthContext';
 
 export default function LoginPage() {
+  const router = useRouter();
+  const { login, isLoading, isAuthenticated } = useAuth();
+  
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  const [checking, setChecking] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
-  // Wait for mount, then check if already logged in
+  // Redirect if already logged in
   useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    if (!mounted) return;
-
-    const token = localStorage.getItem('flexoplate_token');
-    const user = localStorage.getItem('flexoplate_user');
-    
-    if (token && user) {
-      // Already logged in - use window.location for clean redirect
-      window.location.href = '/dashboard';
-    } else {
-      setChecking(false);
+    if (!isLoading && isAuthenticated) {
+      router.push('/dashboard');
     }
-  }, [mounted]);
+  }, [isLoading, isAuthenticated, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setLoading(true);
+    setSubmitting(true);
     
     try {
-      const res = await fetch(`${API_BASE}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      });
-      
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.detail || 'Login failed');
-      }
-      
-      const data = await res.json();
-      
-      // Store auth data
-      localStorage.setItem('flexoplate_token', data.access_token);
-      localStorage.setItem('flexoplate_user', JSON.stringify(data.user));
-      
-      // Use window.location for clean navigation (avoids Next.js router caching issues)
-      window.location.href = '/dashboard';
-      
+      await login(email, password);
+      // AuthContext updates, useEffect will redirect
+      router.push('/dashboard');
     } catch (err: any) {
       setError(err.message || 'Login failed');
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
-  // Show nothing while checking auth status
-  if (!mounted || checking) {
+  // Show loading while checking auth
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  // Don't show login form if already authenticated (redirect happening)
+  if (isAuthenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
@@ -107,7 +88,7 @@ export default function LoginPage() {
               onChange={(e) => setEmail(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
               placeholder="you@example.com"
-              disabled={loading}
+              disabled={submitting}
             />
           </div>
 
@@ -123,16 +104,16 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
               placeholder="••••••••"
-              disabled={loading}
+              disabled={submitting}
             />
           </div>
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={submitting}
             className="w-full py-3 px-4 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? (
+            {submitting ? (
               <span className="flex items-center justify-center gap-2">
                 <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
