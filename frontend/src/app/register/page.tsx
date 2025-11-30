@@ -2,19 +2,15 @@
 
 // frontend/src/app/register/page.tsx
 // ===================================
-// Registration page
+// Standalone - no AuthContext dependency
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useAuth } from '../../context/AuthContext';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
 
 export default function RegisterPage() {
-  const router = useRouter();
-  const { isLoading, isAuthenticated } = useAuth();
-  
+  const [mounted, setMounted] = useState(false);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -26,12 +22,21 @@ export default function RegisterPage() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Redirect if already logged in
   useEffect(() => {
-    if (!isLoading && isAuthenticated) {
-      router.push('/dashboard');
+    setMounted(true);
+  }, []);
+
+  // Check if already logged in
+  useEffect(() => {
+    if (!mounted) return;
+    
+    const token = localStorage.getItem('flexoplate_token');
+    const user = localStorage.getItem('flexoplate_user');
+    
+    if (token && user) {
+      window.location.href = '/dashboard';
     }
-  }, [isLoading, isAuthenticated, router]);
+  }, [mounted]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,11 +74,14 @@ export default function RegisterPage() {
       
       const data = await res.json();
       
-      // Save auth data
-      localStorage.setItem('flexoplate_token', data.access_token);
-      localStorage.setItem('flexoplate_user', JSON.stringify(data.user));
+      // Handle both token field names
+      const token = data.access_token || data.token;
       
-      // Redirect to dashboard
+      if (token) {
+        localStorage.setItem('flexoplate_token', token);
+        localStorage.setItem('flexoplate_user', JSON.stringify(data.user));
+      }
+      
       window.location.href = '/dashboard';
       
     } catch (err: any) {
@@ -82,17 +90,7 @@ export default function RegisterPage() {
     }
   };
 
-  // Show loading while checking auth
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-
-  // Don't show form if already authenticated
-  if (isAuthenticated) {
+  if (!mounted) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
