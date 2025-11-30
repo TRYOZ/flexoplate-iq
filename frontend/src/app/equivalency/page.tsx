@@ -3,7 +3,6 @@
 // frontend/src/app/equivalency/page.tsx
 // ======================================
 // Plate Equivalency Finder Tool
-// This is a copy of the home page equivalency tool for direct /equivalency access
 
 import { useState, useEffect } from 'react';
 
@@ -78,8 +77,8 @@ export default function EquivalencyPage() {
     }
   };
 
-  // Get unique suppliers for filter
-  const suppliers = [...new Set(plates.map(p => p.supplier))].sort();
+  // Get unique suppliers for filter - TypeScript compatible
+  const suppliers = Array.from(new Set(plates.map(p => p.supplier))).sort();
 
   // Filter plates by search term
   const filteredPlates = plates.filter(p => 
