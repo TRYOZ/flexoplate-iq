@@ -1,48 +1,105 @@
 'use client';
 
 // frontend/src/app/layout.tsx
+// ============================
+// COMPLETE FIXED VERSION - Uses AuthProvider for consistent auth state
 
 import './globals.css';
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { AuthProvider, useAuth } from '../context/AuthContext';
 
 function Header() {
-  const [user, setUser] = useState<any>(null);
+  const { user, isLoading, isAuthenticated, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const pathname = usePathname();
 
-  useEffect(() => {
-    const storedUser = localStorage.getItem('flexoplate_user');
-    if (storedUser) {
-      try {
-        setUser(JSON.parse(storedUser));
-      } catch {
-        localStorage.removeItem('flexoplate_user');
-        localStorage.removeItem('flexoplate_token');
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    const storedUser = localStorage.getItem('flexoplate_user');
-    if (storedUser) {
-      try {
-        setUser(JSON.parse(storedUser));
-      } catch {
-        setUser(null);
-      }
-    } else {
-      setUser(null);
-    }
-  }, [pathname]);
-
   const handleLogout = () => {
-    localStorage.removeItem('flexoplate_token');
-    localStorage.removeItem('flexoplate_user');
-    setUser(null);
+    logout();
     setMenuOpen(false);
     window.location.href = '/';
+  };
+
+  // Don't render auth-dependent UI until loading is complete
+  const renderAuthSection = () => {
+    if (isLoading) {
+      return <div className="w-20 h-8 bg-gray-100 animate-pulse rounded"></div>;
+    }
+
+    if (isAuthenticated && user) {
+      return (
+        <div className="relative">
+          <button
+            onClick={() => setMenuOpen(!menuOpen)}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-50"
+          >
+            <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+              <span className="text-blue-600 font-medium text-sm">
+                {user.first_name?.[0] || user.email[0].toUpperCase()}
+              </span>
+            </div>
+            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          
+          {menuOpen && (
+            <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
+              <div className="px-4 py-2 border-b border-gray-100">
+                <p className="text-sm font-medium text-gray-900">{user.first_name || 'User'}</p>
+                <p className="text-xs text-gray-500">{user.email}</p>
+              </div>
+              <Link 
+                href="/dashboard" 
+                className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                onClick={() => setMenuOpen(false)}
+              >
+                Dashboard
+              </Link>
+              <Link 
+                href="/my-equipment" 
+                className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                onClick={() => setMenuOpen(false)}
+              >
+                My Equipment
+              </Link>
+              <Link 
+                href="/my-plates" 
+                className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                onClick={() => setMenuOpen(false)}
+              >
+                My Plates
+              </Link>
+              <hr className="my-2" />
+              <button
+                onClick={handleLogout}
+                className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-50"
+              >
+                Logout
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex items-center gap-2">
+        <Link 
+          href="/login" 
+          className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900"
+        >
+          Login
+        </Link>
+        <Link 
+          href="/register" 
+          className="px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+        >
+          Sign Up
+        </Link>
+      </div>
+    );
   };
 
   return (
@@ -50,7 +107,7 @@ function Header() {
       <div className="max-w-6xl mx-auto px-4">
         <div className="flex items-center justify-between h-14">
           {/* Logo */}
-          <Link href={user ? "/dashboard" : "/"} className="flex items-center gap-2">
+          <Link href={isAuthenticated ? "/dashboard" : "/"} className="flex items-center gap-2">
             <div className="w-8 h-8 bg-blue-500 rounded flex items-center justify-center">
               <span className="text-white font-bold text-sm">FP</span>
             </div>
@@ -59,7 +116,7 @@ function Header() {
 
           {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center gap-1">
-            {user && (
+            {isAuthenticated && (
               <Link 
                 href="/dashboard" 
                 className={`px-3 py-2 rounded-lg text-sm ${pathname === '/dashboard' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
@@ -83,114 +140,17 @@ function Header() {
               href="/plates" 
               className={`px-3 py-2 rounded-lg text-sm ${pathname === '/plates' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
             >
-              Catalog
+              Plates
             </Link>
-
-            {user ? (
-              <>
-                {/* User dropdown */}
-                <div className="relative ml-2">
-                  <button
-                    onClick={() => setMenuOpen(!menuOpen)}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-50"
-                  >
-                    <div className="w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center">
-                      <span className="text-blue-600 text-xs font-medium">
-                        {user.first_name?.[0] || user.email?.[0]?.toUpperCase() || 'U'}
-                      </span>
-                    </div>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
-                  
-                  {menuOpen && (
-                    <>
-                      <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-                      <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
-                        <div className="px-4 py-3 border-b border-gray-100">
-                          <p className="text-sm font-medium text-gray-900">
-                            {user.first_name ? `${user.first_name} ${user.last_name || ''}` : 'User'}
-                          </p>
-                          <p className="text-xs text-gray-500 truncate">{user.email}</p>
-                          {user.company?.name && (
-                            <p className="text-xs text-gray-400 mt-1">{user.company.name}</p>
-                          )}
-                        </div>
-                        
-                        <div className="py-1">
-                          <p className="px-4 py-1 text-xs font-medium text-gray-400 uppercase">My Workspace</p>
-                          <Link 
-                            href="/dashboard"
-                            className={`flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-50 ${
-                              pathname === '/dashboard' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'
-                            }`}
-                            onClick={() => setMenuOpen(false)}
-                          >
-                            <span>📊</span> Dashboard
-                          </Link>
-                          <Link 
-                            href="/my-plates"
-                            className={`flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-50 ${
-                              pathname === '/my-plates' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'
-                            }`}
-                            onClick={() => setMenuOpen(false)}
-                          >
-                            <span>📋</span> My Plates
-                          </Link>
-                          <Link 
-                            href="/my-equipment"
-                            className={`flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-50 ${
-                              pathname === '/my-equipment' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'
-                            }`}
-                            onClick={() => setMenuOpen(false)}
-                          >
-                            <span>🔧</span> My Equipment
-                          </Link>
-                          <Link 
-                            href="/my-recipes"
-                            className={`flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-50 ${
-                              pathname === '/my-recipes' ? 'text-blue-600 bg-blue-50' : 'text-gray-700'
-                            }`}
-                            onClick={() => setMenuOpen(false)}
-                          >
-                            <span>📝</span> Saved Recipes
-                          </Link>
-                        </div>
-                        
-                        <div className="border-t border-gray-100 py-1">
-                          <button
-                            onClick={handleLogout}
-                            className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-50 flex items-center gap-2"
-                          >
-                            <span>🚪</span> Logout
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div className="flex items-center gap-2 ml-2">
-                <Link 
-                  href="/login" 
-                  className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900"
-                >
-                  Login
-                </Link>
-                <Link 
-                  href="/register" 
-                  className="bg-blue-500 hover:bg-blue-600 text-white text-sm px-4 py-2 rounded-lg"
-                >
-                  Sign Up Free
-                </Link>
-              </div>
-            )}
           </nav>
 
-          {/* Mobile menu button */}
-          <button
+          {/* Auth Section */}
+          <div className="hidden md:block">
+            {renderAuthSection()}
+          </div>
+
+          {/* Mobile Menu Button */}
+          <button 
             className="md:hidden p-2"
             onClick={() => setMenuOpen(!menuOpen)}
           >
@@ -204,53 +164,81 @@ function Header() {
           </button>
         </div>
 
-        {/* Mobile Navigation */}
+        {/* Mobile Menu */}
         {menuOpen && (
-          <nav className="md:hidden py-4 border-t border-gray-100">
-            <div className="flex flex-col gap-1">
-              {user && (
-                <Link href="/dashboard" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2" onClick={() => setMenuOpen(false)}>
-                  <span>📊</span> Dashboard
+          <nav className="md:hidden py-4 border-t border-gray-200">
+            <div className="flex flex-col gap-2">
+              {isAuthenticated && (
+                <Link 
+                  href="/dashboard" 
+                  className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  Dashboard
                 </Link>
               )}
-              <Link href="/" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg" onClick={() => setMenuOpen(false)}>
-                Plate Equivalency
+              <Link 
+                href="/" 
+                className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg"
+                onClick={() => setMenuOpen(false)}
+              >
+                Equivalency
               </Link>
-              <Link href="/exposure" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg" onClick={() => setMenuOpen(false)}>
-                Exposure Calculator
+              <Link 
+                href="/exposure" 
+                className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg"
+                onClick={() => setMenuOpen(false)}
+              >
+                Exposure
               </Link>
-              <Link href="/plates" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg" onClick={() => setMenuOpen(false)}>
-                Plate Catalog
+              <Link 
+                href="/plates" 
+                className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg"
+                onClick={() => setMenuOpen(false)}
+              >
+                Plates
               </Link>
-              
-              {user ? (
+              <hr className="my-2" />
+              {isAuthenticated && user ? (
                 <>
-                  <hr className="my-2" />
-                  <p className="px-3 py-1 text-xs font-medium text-gray-400 uppercase">My Workspace</p>
-                  <Link href="/my-plates" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2" onClick={() => setMenuOpen(false)}>
-                    <span>📋</span> My Plates
+                  <Link 
+                    href="/my-equipment" 
+                    className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    My Equipment
                   </Link>
-                  <Link href="/my-equipment" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2" onClick={() => setMenuOpen(false)}>
-                    <span>🔧</span> My Equipment
+                  <Link 
+                    href="/my-plates" 
+                    className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    My Plates
                   </Link>
-                  <Link href="/my-recipes" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2" onClick={() => setMenuOpen(false)}>
-                    <span>📝</span> Saved Recipes
-                  </Link>
-                  <hr className="my-2" />
                   <div className="px-3 py-2 text-sm text-gray-500">
                     {user.email}
                   </div>
-                  <button onClick={handleLogout} className="px-3 py-2 text-left text-red-600 hover:bg-gray-50 rounded-lg">
+                  <button 
+                    onClick={handleLogout}
+                    className="px-3 py-2 text-left text-red-600 hover:bg-gray-50 rounded-lg"
+                  >
                     Logout
                   </button>
                 </>
               ) : (
                 <>
-                  <hr className="my-2" />
-                  <Link href="/login" className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg" onClick={() => setMenuOpen(false)}>
+                  <Link 
+                    href="/login" 
+                    className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg"
+                    onClick={() => setMenuOpen(false)}
+                  >
                     Login
                   </Link>
-                  <Link href="/register" className="px-3 py-2 text-blue-600 font-medium hover:bg-gray-50 rounded-lg" onClick={() => setMenuOpen(false)}>
+                  <Link 
+                    href="/register" 
+                    className="px-3 py-2 text-blue-600 font-medium hover:bg-gray-50 rounded-lg"
+                    onClick={() => setMenuOpen(false)}
+                  >
                     Sign Up Free
                   </Link>
                 </>
@@ -263,6 +251,21 @@ function Header() {
   );
 }
 
+// Click outside to close menu
+function LayoutContent({ children }: { children: React.ReactNode }) {
+  return (
+    <>
+      <Header />
+      <main>
+        {children}
+      </main>
+      <footer className="border-t border-gray-200 mt-12 py-6 text-center text-sm text-gray-500">
+        <p>FlexoPlate IQ © 2024 • Plate Room Intelligence</p>
+      </footer>
+    </>
+  );
+}
+
 export default function RootLayout({
   children,
 }: {
@@ -272,18 +275,13 @@ export default function RootLayout({
     <html lang="en">
       <head>
         <title>FlexoPlate IQ - Plate Room Intelligence</title>
-        <meta name="description" content="Flexographic plate equivalency finder and exposure calculator. Find equivalent plates, calculate exposure times, and manage your plate room." />
+        <meta name="description" content="Flexographic plate equivalency finder and exposure calculator" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="icon" href="/favicon.ico" />
       </head>
       <body className="bg-gray-50 min-h-screen">
-        <Header />
-        <main>
-          {children}
-        </main>
-        <footer className="border-t border-gray-200 mt-12 py-6 text-center text-sm text-gray-500">
-          <p>FlexoPlate IQ © 2024 • Plate Room Intelligence</p>
-        </footer>
+        <AuthProvider>
+          <LayoutContent>{children}</LayoutContent>
+        </AuthProvider>
       </body>
     </html>
   );
