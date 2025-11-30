@@ -2,55 +2,89 @@
 
 // frontend/src/app/login/page.tsx
 // ================================
-// Uses AuthContext for login
+// Standalone login - doesn't depend on AuthContext for login action
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useAuth } from '../../context/AuthContext';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
 
 export default function LoginPage() {
-  const router = useRouter();
-  const { login, isLoading, isAuthenticated } = useAuth();
-  
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
-  // Redirect if already logged in
+  // Wait for mount before checking localStorage
   useEffect(() => {
-    if (!isLoading && isAuthenticated) {
-      router.push('/dashboard');
+    setMounted(true);
+  }, []);
+
+  // Check if already logged in (only after mount)
+  useEffect(() => {
+    if (!mounted) return;
+    
+    const token = localStorage.getItem('flexoplate_token');
+    const user = localStorage.getItem('flexoplate_user');
+    
+    if (token && user) {
+      // Already logged in, redirect to dashboard
+      window.location.href = '/dashboard';
     }
-  }, [isLoading, isAuthenticated, router]);
+  }, [mounted]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Clear previous errors
     setError('');
     setSubmitting(true);
     
+    console.log('Attempting login with:', email); // Debug log
+    
     try {
-      await login(email, password);
-      // AuthContext updates, useEffect will redirect
-      router.push('/dashboard');
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ email, password })
+      });
+      
+      console.log('Response status:', response.status); // Debug log
+      
+      const data = await response.json();
+      console.log('Response data:', data); // Debug log
+      
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || `Login failed (${response.status})`);
+      }
+      
+      // Check if we got the expected data
+      if (!data.access_token) {
+        throw new Error('No access token received');
+      }
+      
+      // Save to localStorage
+      localStorage.setItem('flexoplate_token', data.access_token);
+      localStorage.setItem('flexoplate_user', JSON.stringify(data.user));
+      
+      console.log('Login successful, redirecting...'); // Debug log
+      
+      // Use window.location for clean redirect
+      window.location.href = '/dashboard';
+      
     } catch (err: any) {
-      setError(err.message || 'Login failed');
+      console.error('Login error:', err); // Debug log
+      setError(err.message || 'Login failed. Please try again.');
       setSubmitting(false);
     }
   };
 
-  // Show loading while checking auth
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-
-  // Don't show login form if already authenticated (redirect happening)
-  if (isAuthenticated) {
+  // Don't render until mounted (prevents hydration issues)
+  if (!mounted) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
@@ -89,6 +123,7 @@ export default function LoginPage() {
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
               placeholder="you@example.com"
               disabled={submitting}
+              autoComplete="email"
             />
           </div>
 
@@ -105,6 +140,7 @@ export default function LoginPage() {
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
               placeholder="••••••••"
               disabled={submitting}
+              autoComplete="current-password"
             />
           </div>
 
@@ -138,6 +174,11 @@ export default function LoginPage() {
           <Link href="/" className="text-sm text-gray-500 hover:text-gray-700">
             ← Continue as guest
           </Link>
+        </div>
+        
+        {/* Debug info - remove in production */}
+        <div className="text-center text-xs text-gray-400">
+          API: {API_BASE}
         </div>
       </div>
     </div>
