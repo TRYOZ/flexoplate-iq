@@ -1,338 +1,316 @@
 'use client';
 
+// frontend/src/app/dashboard/page.tsx
+// =====================================
+// FIXED: Added loading state to prevent redirect race condition
+
 import { useState, useEffect } from 'react';
-import { Search, ArrowRight, Check, AlertTriangle, Info, RefreshCw } from 'lucide-react';
-import { api, Plate, PlateEquivalent, Supplier } from '@/lib/api';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
-function ScoreBadge({ score }: { score: number }) {
-  let colorClass = 'bg-gray-100 text-gray-800';
-  let label = 'Low';
-  
-  if (score >= 90) {
-    colorClass = 'bg-green-100 text-green-800';
-    label = 'Excellent';
-  } else if (score >= 75) {
-    colorClass = 'bg-blue-100 text-blue-800';
-    label = 'Good';
-  } else if (score >= 60) {
-    colorClass = 'bg-yellow-100 text-yellow-800';
-    label = 'Fair';
-  } else if (score >= 40) {
-    colorClass = 'bg-orange-100 text-orange-800';
-    label = 'Limited';
-  }
-  
-  return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>
-      {score}% {label}
-    </span>
-  );
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
+
+interface User {
+  id: string;
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  company_name?: string;
 }
 
-function PlateCard({ plate, onClick, selected }: { plate: Plate; onClick: () => void; selected?: boolean }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
-        selected 
-          ? 'border-blue-500 bg-blue-50' 
-          : 'border-gray-200 hover:border-gray-300 bg-white'
-      }`}
-    >
-      <div className="flex justify-between items-start">
-        <div>
-          <p className="font-medium text-gray-900">
-            {plate.display_name || plate.family_name}
-          </p>
-          <p className="text-sm text-gray-500">{plate.supplier_name}</p>
-        </div>
-        <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
-          {plate.thickness_mm}mm
-        </span>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-1">
-        {plate.process_type && (
-          <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">
-            {plate.process_type}
-          </span>
-        )}
-        {plate.surface_type && (
-          <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
-            {plate.surface_type.replace('_', ' ')}
-          </span>
-        )}
-        {plate.imaging_type && (
-          <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
-            {plate.imaging_type}
-          </span>
-        )}
-      </div>
-    </button>
-  );
+interface Equipment {
+  id: string;
+  name: string;
+  model: string;
+  lamp_install_date: string;
+  lamp_age_days: number;
 }
 
-function EquivalentCard({ plate }: { plate: PlateEquivalent }) {
-  return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow">
-      <div className="flex justify-between items-start mb-3">
-        <div>
-          <p className="font-medium text-gray-900">
-            {plate.display_name || plate.family_name}
-          </p>
-          <p className="text-sm text-gray-500">{plate.supplier_name}</p>
-        </div>
-        <ScoreBadge score={plate.similarity_score} />
-      </div>
-      
-      <div className="grid grid-cols-2 gap-2 text-sm mb-3">
-        <div>
-          <span className="text-gray-500">Thickness:</span>{' '}
-          <span className="font-medium">{plate.thickness_mm}mm</span>
-        </div>
-        <div>
-          <span className="text-gray-500">Hardness:</span>{' '}
-          <span className="font-medium">{plate.hardness_shore || 'N/A'} Shore</span>
-        </div>
-        <div>
-          <span className="text-gray-500">Process:</span>{' '}
-          <span className="font-medium">{plate.process_type || 'N/A'}</span>
-        </div>
-        <div>
-          <span className="text-gray-500">Surface:</span>{' '}
-          <span className="font-medium">{plate.surface_type?.replace('_', ' ') || 'N/A'}</span>
-        </div>
-      </div>
-      
-      {plate.match_notes && plate.match_notes.length > 0 && (
-        <div className="border-t border-gray-100 pt-3 mt-3">
-          <p className="text-xs text-gray-500 mb-1">Notes:</p>
-          <ul className="space-y-1">
-            {plate.match_notes.map((note, i) => (
-              <li key={i} className="text-sm text-gray-600 flex items-start gap-1">
-                {note.startsWith('✓') ? (
-                  <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-                ) : (
-                  <Info className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
-                )}
-                <span>{note.replace('✓ ', '')}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
+interface FavoritePlate {
+  id: string;
+  plate_id: string;
+  plate_name: string;
+  supplier: string;
 }
 
-export default function HomePage() {
-  const [plates, setPlates] = useState<Plate[]>([]);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [selectedPlate, setSelectedPlate] = useState<Plate | null>(null);
-  const [equivalents, setEquivalents] = useState<PlateEquivalent[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+interface Recipe {
+  id: string;
+  name: string;
+  plate_name: string;
+  created_at: string;
+}
+
+export default function DashboardPage() {
+  const router = useRouter();
   
-  // Filters
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedSupplier, setSelectedSupplier] = useState('');
-  const [targetSupplier, setTargetSupplier] = useState('');
+  // CRITICAL: Start with isLoading = true to prevent premature redirect
+  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   
-  // Load initial data
-  useEffect(() => {
-    async function loadData() {
-      try {
-        setLoading(true);
-        const [platesData, suppliersData] = await Promise.all([
-          api.getPlates({ limit: 100 }),
-          api.getSuppliers(true)
-        ]);
-        setPlates(platesData);
-        setSuppliers(suppliersData);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load data');
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
-  }, []);
-  
-  // Filter plates
-  const filteredPlates = plates.filter(plate => {
-    const matchesSearch = !searchTerm || 
-      plate.display_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      plate.family_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      plate.sku_code?.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesSupplier = !selectedSupplier || 
-      plate.supplier_name === selectedSupplier;
-    
-    return matchesSearch && matchesSupplier;
+  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [favorites, setFavorites] = useState<FavoritePlate[]>([]);
+  const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [stats, setStats] = useState({
+    equivalencySearches: 0,
+    exposureCalculations: 0
   });
-  
-  // Find equivalents when plate is selected
-  async function findEquivalents(plate: Plate) {
-    setSelectedPlate(plate);
-    setEquivalents([]);
-    setSearchLoading(true);
-    setError(null);
-    
-    try {
-      const result = await api.findEquivalents({
-        source_plate_id: plate.id,
-        target_supplier: targetSupplier || undefined
-      });
-      setEquivalents(result.equivalents);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to find equivalents');
-    } finally {
-      setSearchLoading(false);
-    }
-  }
-  
-  if (loading) {
+
+  // Step 1: Check authentication on mount
+  useEffect(() => {
+    // Small delay to ensure localStorage is available (hydration)
+    const checkAuth = () => {
+      const storedToken = localStorage.getItem('flexoplate_token');
+      const storedUser = localStorage.getItem('flexoplate_user');
+      
+      if (storedToken && storedUser) {
+        try {
+          setToken(storedToken);
+          setUser(JSON.parse(storedUser));
+        } catch {
+          // Invalid stored data, clear it
+          localStorage.removeItem('flexoplate_token');
+          localStorage.removeItem('flexoplate_user');
+          router.push('/login');
+          return;
+        }
+      } else {
+        // No auth data, redirect to login
+        router.push('/login');
+        return;
+      }
+      
+      // Auth check complete
+      setIsLoading(false);
+    };
+
+    // Use setTimeout to ensure this runs after hydration
+    const timer = setTimeout(checkAuth, 100);
+    return () => clearTimeout(timer);
+  }, [router]);
+
+  // Step 2: Fetch dashboard data once we have a token
+  useEffect(() => {
+    if (!token || isLoading) return;
+
+    const fetchDashboardData = async () => {
+      try {
+        // Fetch user's equipment
+        const equipmentRes = await fetch(`${API_BASE}/api/me/equipment`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (equipmentRes.ok) {
+          const data = await equipmentRes.json();
+          setEquipment(data.equipment || []);
+        }
+
+        // Fetch favorite plates
+        const favoritesRes = await fetch(`${API_BASE}/api/me/plates`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (favoritesRes.ok) {
+          const data = await favoritesRes.json();
+          setFavorites(data.plates || []);
+        }
+
+        // Fetch saved recipes
+        const recipesRes = await fetch(`${API_BASE}/api/me/recipes`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (recipesRes.ok) {
+          const data = await recipesRes.json();
+          setRecipes(data.recipes || []);
+        }
+
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error);
+      }
+    };
+
+    fetchDashboardData();
+  }, [token, isLoading]);
+
+  // Show loading state while checking auth
+  if (isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
-      </div>
-    );
-  }
-  
-  if (error && !plates.length) {
-    return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
-        <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-3" />
-        <h2 className="text-lg font-medium text-red-900 mb-2">Connection Error</h2>
-        <p className="text-red-700">{error}</p>
-        <p className="text-sm text-red-600 mt-2">
-          Make sure the backend API is running and accessible.
-        </p>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
       </div>
     );
   }
 
+  // If no user after loading, don't render (redirect is happening)
+  if (!user) {
+    return null;
+  }
+
   return (
-    <div className="space-y-6">
-      {/* Page header */}
-      <div>
-        <h2 className="text-2xl font-bold text-gray-900">Plate Equivalency Finder</h2>
-        <p className="text-gray-600 mt-1">
-          Select a plate to find equivalent alternatives from other suppliers
-        </p>
-      </div>
-      
-      <div className="grid lg:grid-cols-2 gap-6">
-        {/* Left panel - Source plate selection */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h3 className="font-semibold text-gray-900 mb-4">1. Select Source Plate</h3>
-          
-          {/* Search and filter */}
-          <div className="space-y-3 mb-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search plates..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        {/* Welcome Header */}
+        <div className="mb-8">
+          <h1 className="text-2xl font-bold text-gray-900">
+            Welcome back{user.first_name ? `, ${user.first_name}` : ''}!
+          </h1>
+          <p className="text-gray-600 mt-1">
+            {user.company_name || 'Your FlexoPlate IQ Dashboard'}
+          </p>
+        </div>
+
+        {/* Quick Actions */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          <Link 
+            href="/"
+            className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">Plate Equivalency</h3>
+                <p className="text-sm text-gray-500">Find equivalent plates</p>
+              </div>
             </div>
-            
-            <select
-              value={selectedSupplier}
-              onChange={(e) => setSelectedSupplier(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="">All Suppliers</option>
-              {suppliers.map(s => (
-                <option key={s.id} value={s.name}>{s.name}</option>
-              ))}
-            </select>
-          </div>
+          </Link>
+
+          <Link 
+            href="/exposure"
+            className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">Exposure Calculator</h3>
+                <p className="text-sm text-gray-500">Calculate exposure times</p>
+              </div>
+            </div>
+          </Link>
+
+          <Link 
+            href="/my-equipment"
+            className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">My Equipment</h3>
+                <p className="text-sm text-gray-500">Manage your equipment</p>
+              </div>
+            </div>
+          </Link>
+        </div>
+
+        {/* Dashboard Sections */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           
-          {/* Plate list */}
-          <div className="space-y-2 max-h-[500px] overflow-y-auto">
-            {filteredPlates.length === 0 ? (
-              <p className="text-center text-gray-500 py-8">No plates found</p>
+          {/* My Equipment */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">My Equipment</h2>
+              <Link href="/my-equipment" className="text-sm text-blue-600 hover:text-blue-700">
+                Manage →
+              </Link>
+            </div>
+            {equipment.length > 0 ? (
+              <div className="space-y-3">
+                {equipment.slice(0, 3).map((eq) => (
+                  <div key={eq.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div>
+                      <p className="font-medium text-gray-900">{eq.name}</p>
+                      <p className="text-sm text-gray-500">{eq.model}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-sm font-medium ${eq.lamp_age_days > 1000 ? 'text-red-600' : eq.lamp_age_days > 500 ? 'text-yellow-600' : 'text-green-600'}`}>
+                        {eq.lamp_age_days} days
+                      </p>
+                      <p className="text-xs text-gray-500">lamp age</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
             ) : (
-              filteredPlates.map(plate => (
-                <PlateCard
-                  key={plate.id}
-                  plate={plate}
-                  selected={selectedPlate?.id === plate.id}
-                  onClick={() => findEquivalents(plate)}
-                />
-              ))
+              <div className="text-center py-8 text-gray-500">
+                <p>No equipment saved yet</p>
+                <Link href="/my-equipment" className="text-blue-600 hover:text-blue-700 text-sm mt-2 inline-block">
+                  Add your first equipment →
+                </Link>
+              </div>
             )}
           </div>
-        </div>
-        
-        {/* Right panel - Equivalents */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-gray-900">2. Equivalent Plates</h3>
-            
-            {/* Target supplier filter */}
-            <select
-              value={targetSupplier}
-              onChange={(e) => {
-                setTargetSupplier(e.target.value);
-                if (selectedPlate) findEquivalents(selectedPlate);
-              }}
-              className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">Any Supplier</option>
-              {suppliers.filter(s => s.name !== selectedPlate?.supplier_name).map(s => (
-                <option key={s.id} value={s.name}>{s.name}</option>
-              ))}
-            </select>
-          </div>
-          
-          {!selectedPlate ? (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-              <ArrowRight className="w-12 h-12 mb-3" />
-              <p>Select a source plate to find equivalents</p>
+
+          {/* Favorite Plates */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">Favorite Plates</h2>
+              <Link href="/my-plates" className="text-sm text-blue-600 hover:text-blue-700">
+                View all →
+              </Link>
             </div>
-          ) : searchLoading ? (
-            <div className="flex items-center justify-center py-16">
-              <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
-            </div>
-          ) : error ? (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700">
-              {error}
-            </div>
-          ) : equivalents.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-              <AlertTriangle className="w-12 h-12 mb-3" />
-              <p className="text-center">No equivalents found</p>
-              <p className="text-sm text-center mt-1">
-                Try selecting a different target supplier or plate
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3 max-h-[500px] overflow-y-auto">
-              {/* Source plate summary */}
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
-                <p className="text-sm text-blue-800">
-                  <span className="font-medium">Source:</span>{' '}
-                  {selectedPlate.display_name || selectedPlate.family_name}{' '}
-                  ({selectedPlate.supplier_name}) • {selectedPlate.thickness_mm}mm
-                </p>
+            {favorites.length > 0 ? (
+              <div className="space-y-3">
+                {favorites.slice(0, 4).map((fav) => (
+                  <div key={fav.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div>
+                      <p className="font-medium text-gray-900">{fav.plate_name}</p>
+                      <p className="text-sm text-gray-500">{fav.supplier}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
-              
-              {/* Results count */}
-              <p className="text-sm text-gray-500">
-                Found {equivalents.length} equivalent{equivalents.length !== 1 ? 's' : ''}
-              </p>
-              
-              {/* Equivalent plates */}
-              {equivalents.map(plate => (
-                <EquivalentCard key={plate.id} plate={plate} />
-              ))}
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <p>No favorite plates yet</p>
+                <Link href="/" className="text-blue-600 hover:text-blue-700 text-sm mt-2 inline-block">
+                  Browse plates and add favorites →
+                </Link>
+              </div>
+            )}
+          </div>
+
+          {/* Saved Recipes */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 lg:col-span-2">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">Saved Recipes</h2>
+              <Link href="/recipes" className="text-sm text-blue-600 hover:text-blue-700">
+                View all →
+              </Link>
             </div>
-          )}
+            {recipes.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {recipes.slice(0, 6).map((recipe) => (
+                  <div key={recipe.id} className="p-4 bg-gray-50 rounded-lg">
+                    <p className="font-medium text-gray-900">{recipe.name}</p>
+                    <p className="text-sm text-gray-500">{recipe.plate_name}</p>
+                    <p className="text-xs text-gray-400 mt-2">
+                      {new Date(recipe.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <p>No saved recipes yet</p>
+                <Link href="/exposure" className="text-blue-600 hover:text-blue-700 text-sm mt-2 inline-block">
+                  Calculate exposure and save a recipe →
+                </Link>
+              </div>
+            )}
+          </div>
+
         </div>
       </div>
     </div>
