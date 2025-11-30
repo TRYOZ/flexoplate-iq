@@ -2,38 +2,39 @@
 
 // frontend/src/app/login/page.tsx
 // ================================
-// FIXED: Redirects to /dashboard after login instead of /
+// FIXED v2: Uses window.location to prevent redirect loops
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
 
 export default function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [mounted, setMounted] = useState(false);
+  const [checking, setChecking] = useState(true);
 
-  // Check if already logged in
+  // Wait for mount, then check if already logged in
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const token = localStorage.getItem('flexoplate_token');
-      const user = localStorage.getItem('flexoplate_user');
-      
-      if (token && user) {
-        // Already logged in, redirect to dashboard
-        router.push('/dashboard');
-      } else {
-        setCheckingAuth(false);
-      }
-    }, 100);
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+
+    const token = localStorage.getItem('flexoplate_token');
+    const user = localStorage.getItem('flexoplate_user');
     
-    return () => clearTimeout(timer);
-  }, [router]);
+    if (token && user) {
+      // Already logged in - use window.location for clean redirect
+      window.location.href = '/dashboard';
+    } else {
+      setChecking(false);
+    }
+  }, [mounted]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,11 +59,8 @@ export default function LoginPage() {
       localStorage.setItem('flexoplate_token', data.access_token);
       localStorage.setItem('flexoplate_user', JSON.stringify(data.user));
       
-      // Small delay to ensure localStorage is written before redirect
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Redirect to dashboard
-      router.push('/dashboard');
+      // Use window.location for clean navigation (avoids Next.js router caching issues)
+      window.location.href = '/dashboard';
       
     } catch (err: any) {
       setError(err.message || 'Login failed');
@@ -70,8 +68,8 @@ export default function LoginPage() {
     }
   };
 
-  // Show loading while checking if already authenticated
-  if (checkingAuth) {
+  // Show nothing while checking auth status
+  if (!mounted || checking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
@@ -109,6 +107,7 @@ export default function LoginPage() {
               onChange={(e) => setEmail(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
               placeholder="you@example.com"
+              disabled={loading}
             />
           </div>
 
@@ -124,6 +123,7 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
               placeholder="••••••••"
+              disabled={loading}
             />
           </div>
 
