@@ -2,11 +2,9 @@
 
 // frontend/src/app/my-equipment/page.tsx
 // =======================================
-// Uses AuthContext for authentication
+// Standalone - no AuthContext dependency
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { useAuth } from '../../context/AuthContext';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
 
@@ -31,15 +29,14 @@ interface EquipmentModel {
 }
 
 export default function MyEquipmentPage() {
-  const router = useRouter();
-  const { user, token, isLoading, isAuthenticated } = useAuth();
+  const [mounted, setMounted] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
   
   const [myEquipment, setMyEquipment] = useState<Equipment[]>([]);
   const [availableModels, setAvailableModels] = useState<EquipmentModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   
-  // Add equipment form
   const [newEquipment, setNewEquipment] = useState({
     equipment_model_id: '',
     nickname: '',
@@ -47,26 +44,44 @@ export default function MyEquipmentPage() {
     location: ''
   });
 
-  // Redirect if not authenticated
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      router.push('/login');
-    }
-  }, [isLoading, isAuthenticated, router]);
+    setMounted(true);
+  }, []);
 
-  // Fetch data when authenticated
+  // Auth check
   useEffect(() => {
-    if (token && isAuthenticated) {
-      fetchMyEquipment();
-      fetchAvailableModels();
+    if (!mounted) return;
+
+    const storedToken = localStorage.getItem('flexoplate_token');
+    
+    if (!storedToken) {
+      window.location.href = '/login';
+      return;
     }
-  }, [token, isAuthenticated]);
+    
+    setToken(storedToken);
+  }, [mounted]);
+
+  // Fetch data
+  useEffect(() => {
+    if (!token) return;
+    
+    fetchMyEquipment();
+    fetchAvailableModels();
+  }, [token]);
 
   const fetchMyEquipment = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/me/equipment`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      
+      if (res.status === 401) {
+        localStorage.removeItem('flexoplate_token');
+        localStorage.removeItem('flexoplate_user');
+        window.location.href = '/login';
+        return;
+      }
       
       if (res.ok) {
         const data = await res.json();
@@ -148,17 +163,7 @@ export default function MyEquipmentPage() {
     return { color: 'bg-red-100 text-red-800', text: 'Replace Now' };
   };
 
-  // Show loading while checking auth
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-
-  // Don't render if not authenticated
-  if (!isAuthenticated) {
+  if (!mounted || !token) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
@@ -181,7 +186,6 @@ export default function MyEquipmentPage() {
         </button>
       </div>
 
-      {/* Equipment List */}
       {loading ? (
         <div className="flex justify-center py-12">
           <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
@@ -246,7 +250,6 @@ export default function MyEquipmentPage() {
         </div>
       )}
 
-      {/* Add Equipment Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
