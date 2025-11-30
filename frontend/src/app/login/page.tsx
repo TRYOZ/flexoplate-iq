@@ -2,7 +2,7 @@
 
 // frontend/src/app/login/page.tsx
 // ================================
-// Standalone login - doesn't depend on AuthContext for login action
+// Handles both "token" and "access_token" response formats
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
@@ -29,7 +29,6 @@ export default function LoginPage() {
     const user = localStorage.getItem('flexoplate_user');
     
     if (token && user) {
-      // Already logged in, redirect to dashboard
       window.location.href = '/dashboard';
     }
   }, [mounted]);
@@ -37,11 +36,10 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Clear previous errors
     setError('');
     setSubmitting(true);
     
-    console.log('Attempting login with:', email); // Debug log
+    console.log('Attempting login with:', email);
     
     try {
       const response = await fetch(`${API_BASE}/api/auth/login`, {
@@ -53,37 +51,40 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password })
       });
       
-      console.log('Response status:', response.status); // Debug log
+      console.log('Response status:', response.status);
       
       const data = await response.json();
-      console.log('Response data:', data); // Debug log
+      console.log('Response data:', data);
       
       if (!response.ok) {
         throw new Error(data.detail || data.message || `Login failed (${response.status})`);
       }
       
-      // Check if we got the expected data
-      if (!data.access_token) {
-        throw new Error('No access token received');
+      // Handle BOTH possible token field names: "token" OR "access_token"
+      const token = data.access_token || data.token;
+      
+      if (!token) {
+        console.error('Response has no token field. Data:', JSON.stringify(data));
+        throw new Error('No token received from server');
       }
       
       // Save to localStorage
-      localStorage.setItem('flexoplate_token', data.access_token);
+      localStorage.setItem('flexoplate_token', token);
       localStorage.setItem('flexoplate_user', JSON.stringify(data.user));
       
-      console.log('Login successful, redirecting...'); // Debug log
+      console.log('Login successful, redirecting...');
       
       // Use window.location for clean redirect
       window.location.href = '/dashboard';
       
     } catch (err: any) {
-      console.error('Login error:', err); // Debug log
+      console.error('Login error:', err);
       setError(err.message || 'Login failed. Please try again.');
       setSubmitting(false);
     }
   };
 
-  // Don't render until mounted (prevents hydration issues)
+  // Don't render until mounted
   if (!mounted) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -174,11 +175,6 @@ export default function LoginPage() {
           <Link href="/" className="text-sm text-gray-500 hover:text-gray-700">
             ← Continue as guest
           </Link>
-        </div>
-        
-        {/* Debug info - remove in production */}
-        <div className="text-center text-xs text-gray-400">
-          API: {API_BASE}
         </div>
       </div>
     </div>
