@@ -2,7 +2,7 @@
 
 // frontend/src/app/dashboard/page.tsx
 // =====================================
-// Fixed dashboard with correct data fetching
+// COMPLETE FIX: Correct field names, clickable cards, proper routing
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
@@ -14,13 +14,11 @@ interface User {
   email: string;
   first_name?: string;
   last_name?: string;
-  company_name?: string;
 }
 
 interface Equipment {
   id: string;
   nickname?: string;
-  name?: string;
   model_name?: string;
   supplier_name?: string;
   lamp_age_days?: number;
@@ -30,10 +28,9 @@ interface Equipment {
 interface FavoritePlate {
   id: string;
   plate_id?: string;
-  plate_name?: string;
-  name?: string;
-  supplier?: string;
+  display_name?: string;  // This is the correct field from API
   supplier_name?: string;
+  thickness_mm?: number;
 }
 
 interface Recipe {
@@ -41,6 +38,7 @@ interface Recipe {
   name?: string;
   recipe_name?: string;
   plate_name?: string;
+  plate_display_name?: string;
   created_at?: string;
 }
 
@@ -52,14 +50,12 @@ export default function DashboardPage() {
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [favorites, setFavorites] = useState<FavoritePlate[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [dataLoaded, setDataLoaded] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  // Mount check
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Auth check after mount
   useEffect(() => {
     if (!mounted) return;
 
@@ -80,7 +76,6 @@ export default function DashboardPage() {
     }
   }, [mounted]);
 
-  // Fetch dashboard data
   useEffect(() => {
     if (!token) return;
 
@@ -92,9 +87,7 @@ export default function DashboardPage() {
         });
         if (eqRes.ok) {
           const data = await eqRes.json();
-          console.log('Equipment data:', data);
-          const eqArray = Array.isArray(data) ? data : data.equipment || [];
-          setEquipment(eqArray);
+          setEquipment(Array.isArray(data) ? data : []);
         }
 
         // Fetch favorite plates
@@ -103,9 +96,7 @@ export default function DashboardPage() {
         });
         if (favRes.ok) {
           const data = await favRes.json();
-          console.log('Favorites data:', data);
-          const favArray = Array.isArray(data) ? data : data.plates || [];
-          setFavorites(favArray);
+          setFavorites(Array.isArray(data) ? data : []);
         }
 
         // Fetch recipes
@@ -114,22 +105,18 @@ export default function DashboardPage() {
         });
         if (recRes.ok) {
           const data = await recRes.json();
-          console.log('Recipes data:', data);
-          const recArray = Array.isArray(data) ? data : data.recipes || [];
-          setRecipes(recArray);
+          setRecipes(Array.isArray(data) ? data : []);
         }
-
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
       } finally {
-        setDataLoaded(true);
+        setLoading(false);
       }
     };
 
     fetchData();
   }, [token]);
 
-  // Loading state
   if (!mounted || !user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -149,55 +136,52 @@ export default function DashboardPage() {
           <p className="text-gray-600 mt-1">Your FlexoPlate IQ Dashboard</p>
         </div>
 
-        {/* Quick Actions */}
+        {/* Quick Actions - All clickable */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-          <Link 
-            href="/"
-            className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all"
-          >
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </div>
-              <div>
-                <h3 className="font-semibold text-gray-900">Plate Equivalency</h3>
-                <p className="text-sm text-gray-500">Find equivalent plates</p>
-              </div>
-            </div>
-          </Link>
-
-          <Link 
-            href="/exposure"
-            className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all"
-          >
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-                <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                </svg>
-              </div>
-              <div>
-                <h3 className="font-semibold text-gray-900">Exposure Calculator</h3>
-                <p className="text-sm text-gray-500">Calculate exposure times</p>
+          <Link href="/equivalency" className="block">
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                  <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">Plate Equivalency</h3>
+                  <p className="text-sm text-gray-500">Find equivalent plates</p>
+                </div>
               </div>
             </div>
           </Link>
 
-          <Link 
-            href="/my-equipment"
-            className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all"
-          >
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
-                <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-                </svg>
+          <Link href="/exposure" className="block">
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hover:border-green-300 hover:shadow-md transition-all cursor-pointer">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                  <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">Exposure Calculator</h3>
+                  <p className="text-sm text-gray-500">Calculate exposure times</p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-semibold text-gray-900">My Equipment</h3>
-                <p className="text-sm text-gray-500">Manage your equipment</p>
+            </div>
+          </Link>
+
+          <Link href="/my-equipment" className="block">
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hover:border-purple-300 hover:shadow-md transition-all cursor-pointer">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                  <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">My Equipment</h3>
+                  <p className="text-sm text-gray-500">Manage your equipment</p>
+                </div>
               </div>
             </div>
           </Link>
@@ -214,34 +198,36 @@ export default function DashboardPage() {
                 Manage →
               </Link>
             </div>
-            {!dataLoaded ? (
+            {loading ? (
               <div className="flex justify-center py-8">
                 <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
               </div>
             ) : equipment.length > 0 ? (
               <div className="space-y-3">
-                {equipment.slice(0, 3).map((eq) => {
-                  const name = eq.nickname || eq.name || eq.model_name || 'Equipment';
-                  const model = eq.model_name || eq.supplier_name || '';
-                  const days = eq.lamp_age_days ?? (eq.lamp_age_months ? eq.lamp_age_months * 30 : null);
-                  
-                  return (
-                    <div key={eq.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                {equipment.slice(0, 3).map((eq) => (
+                  <Link href="/my-equipment" key={eq.id} className="block">
+                    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer">
                       <div>
-                        <p className="font-medium text-gray-900">{name}</p>
-                        {model && <p className="text-sm text-gray-500">{model}</p>}
+                        <p className="font-medium text-gray-900">{eq.nickname || 'Equipment'}</p>
+                        <p className="text-sm text-gray-500">{eq.model_name || eq.supplier_name || ''}</p>
                       </div>
-                      {days !== null && (
+                      {(eq.lamp_age_days !== undefined || eq.lamp_age_months !== undefined) && (
                         <div className="text-right">
-                          <p className={`text-sm font-medium ${days > 365 ? 'text-red-600' : days > 180 ? 'text-yellow-600' : 'text-green-600'}`}>
-                            {days} days
+                          <p className={`text-sm font-medium ${
+                            (eq.lamp_age_days || 0) > 365 || (eq.lamp_age_months || 0) > 12 
+                              ? 'text-red-600' 
+                              : (eq.lamp_age_days || 0) > 180 || (eq.lamp_age_months || 0) > 6
+                                ? 'text-yellow-600' 
+                                : 'text-green-600'
+                          }`}>
+                            {eq.lamp_age_days !== undefined ? `${eq.lamp_age_days} days` : `${eq.lamp_age_months} months`}
                           </p>
                           <p className="text-xs text-gray-500">lamp age</p>
                         </div>
                       )}
                     </div>
-                  );
-                })}
+                  </Link>
+                ))}
               </div>
             ) : (
               <div className="text-center py-8 text-gray-500">
@@ -261,30 +247,32 @@ export default function DashboardPage() {
                 View all →
               </Link>
             </div>
-            {!dataLoaded ? (
+            {loading ? (
               <div className="flex justify-center py-8">
                 <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
               </div>
             ) : favorites.length > 0 ? (
               <div className="space-y-3">
-                {favorites.slice(0, 4).map((fav) => {
-                  const name = fav.plate_name || fav.name || 'Plate';
-                  const supplier = fav.supplier || fav.supplier_name || '';
-                  
-                  return (
-                    <div key={fav.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                {favorites.slice(0, 4).map((fav) => (
+                  <Link href="/my-plates" key={fav.id} className="block">
+                    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer">
                       <div>
-                        <p className="font-medium text-gray-900">{name}</p>
-                        {supplier && <p className="text-sm text-gray-500">{supplier}</p>}
+                        <p className="font-medium text-gray-900">{fav.display_name || 'Plate'}</p>
+                        <p className="text-sm text-gray-500">{fav.supplier_name || ''}</p>
                       </div>
+                      {fav.thickness_mm && (
+                        <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">
+                          {fav.thickness_mm}mm
+                        </span>
+                      )}
                     </div>
-                  );
-                })}
+                  </Link>
+                ))}
               </div>
             ) : (
               <div className="text-center py-8 text-gray-500">
                 <p>No favorite plates yet</p>
-                <Link href="/my-plates" className="text-blue-600 hover:text-blue-700 text-sm mt-2 inline-block">
+                <Link href="/plates" className="text-blue-600 hover:text-blue-700 text-sm mt-2 inline-block">
                   Browse plates and add favorites →
                 </Link>
               </div>
@@ -295,31 +283,29 @@ export default function DashboardPage() {
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 lg:col-span-2">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Saved Recipes</h2>
-              <Link href="/recipes" className="text-sm text-blue-600 hover:text-blue-700">
+              <Link href="/my-recipes" className="text-sm text-blue-600 hover:text-blue-700">
                 View all →
               </Link>
             </div>
-            {!dataLoaded ? (
+            {loading ? (
               <div className="flex justify-center py-8">
                 <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
               </div>
             ) : recipes.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {recipes.slice(0, 6).map((recipe) => {
-                  const name = recipe.name || recipe.recipe_name || 'Recipe';
-                  
-                  return (
-                    <div key={recipe.id} className="p-4 bg-gray-50 rounded-lg">
-                      <p className="font-medium text-gray-900">{name}</p>
-                      {recipe.plate_name && <p className="text-sm text-gray-500">{recipe.plate_name}</p>}
+                {recipes.slice(0, 6).map((recipe) => (
+                  <Link href="/my-recipes" key={recipe.id} className="block">
+                    <div className="p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer">
+                      <p className="font-medium text-gray-900">{recipe.name || recipe.recipe_name || 'Recipe'}</p>
+                      <p className="text-sm text-gray-500">{recipe.plate_name || recipe.plate_display_name || ''}</p>
                       {recipe.created_at && (
                         <p className="text-xs text-gray-400 mt-2">
                           {new Date(recipe.created_at).toLocaleDateString()}
                         </p>
                       )}
                     </div>
-                  );
-                })}
+                  </Link>
+                ))}
               </div>
             ) : (
               <div className="text-center py-8 text-gray-500">
