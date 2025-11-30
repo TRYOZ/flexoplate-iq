@@ -2,7 +2,7 @@
 
 // frontend/src/app/layout.tsx
 // ============================
-// FIXED: Navigation and auth state
+// Equivalency stays at root /, Dashboard for logged-in users
 
 import './globals.css';
 import { useState, useEffect } from 'react';
@@ -15,12 +15,10 @@ function Header() {
   const [mounted, setMounted] = useState(false);
   const pathname = usePathname();
 
-  // Wait for mount
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Load user from localStorage after mount
   useEffect(() => {
     if (!mounted) return;
     
@@ -48,7 +46,6 @@ function Header() {
 
   const isAuthenticated = !!user;
 
-  // Don't render auth-dependent content until mounted
   if (!mounted) {
     return (
       <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
@@ -70,7 +67,7 @@ function Header() {
     <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
       <div className="max-w-6xl mx-auto px-4">
         <div className="flex items-center justify-between h-14">
-          {/* Logo */}
+          {/* Logo - goes to dashboard if logged in, otherwise home */}
           <Link href={isAuthenticated ? "/dashboard" : "/"} className="flex items-center gap-2">
             <div className="w-8 h-8 bg-blue-500 rounded flex items-center justify-center">
               <span className="text-white font-bold text-sm">FP</span>
@@ -89,8 +86,8 @@ function Header() {
               </Link>
             )}
             <Link 
-              href="/equivalency" 
-              className={`px-3 py-2 rounded-lg text-sm ${pathname === '/equivalency' || pathname === '/' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+              href="/" 
+              className={`px-3 py-2 rounded-lg text-sm ${pathname === '/' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
             >
               Equivalency
             </Link>
@@ -153,6 +150,13 @@ function Header() {
                     >
                       My Plates
                     </Link>
+                    <Link 
+                      href="/my-recipes" 
+                      className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      onClick={() => setMenuOpen(false)}
+                    >
+                      My Recipes
+                    </Link>
                     <hr className="my-2" />
                     <button
                       onClick={handleLogout}
@@ -204,7 +208,7 @@ function Header() {
                 </Link>
               )}
               <Link 
-                href="/equivalency" 
+                href="/" 
                 className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg"
                 onClick={() => setMenuOpen(false)}
               >
@@ -240,6 +244,13 @@ function Header() {
                     onClick={() => setMenuOpen(false)}
                   >
                     My Plates
+                  </Link>
+                  <Link 
+                    href="/my-recipes" 
+                    className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    My Recipes
                   </Link>
                   <div className="px-3 py-2 text-sm text-gray-500">
                     {user.email}
