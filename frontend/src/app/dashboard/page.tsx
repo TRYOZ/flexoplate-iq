@@ -2,21 +2,14 @@
 
 // frontend/src/app/dashboard/page.tsx
 // =====================================
-// FIXED v2: Proper hydration handling to prevent redirect loops
+// Uses AuthContext for authentication
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useAuth } from '../../context/AuthContext';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
-
-interface User {
-  id: string;
-  email: string;
-  first_name?: string;
-  last_name?: string;
-  company_name?: string;
-}
 
 interface Equipment {
   id: string;
@@ -42,50 +35,23 @@ interface Recipe {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const { user, token, isLoading, isAuthenticated } = useAuth();
   
-  // Auth state
-  const [mounted, setMounted] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  
-  // Data state
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [favorites, setFavorites] = useState<FavoritePlate[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [dataLoaded, setDataLoaded] = useState(false);
 
-  // Step 1: Wait for component to mount (hydration complete)
+  // Redirect if not authenticated
   useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  // Step 2: Check auth ONLY after mounted
-  useEffect(() => {
-    if (!mounted) return;
-
-    const storedToken = localStorage.getItem('flexoplate_token');
-    const storedUser = localStorage.getItem('flexoplate_user');
-    
-    if (storedToken && storedUser) {
-      try {
-        const parsedUser = JSON.parse(storedUser);
-        setToken(storedToken);
-        setUser(parsedUser);
-      } catch {
-        // Invalid data - clear and redirect
-        localStorage.removeItem('flexoplate_token');
-        localStorage.removeItem('flexoplate_user');
-        window.location.href = '/login';
-      }
-    } else {
-      // Not logged in - redirect using window.location to avoid Next.js router issues
-      window.location.href = '/login';
+    if (!isLoading && !isAuthenticated) {
+      router.push('/login');
     }
-  }, [mounted]);
+  }, [isLoading, isAuthenticated, router]);
 
-  // Step 3: Fetch dashboard data once we have auth
+  // Fetch dashboard data once authenticated
   useEffect(() => {
-    if (!token || !user) return;
+    if (!token || !isAuthenticated) return;
 
     const fetchDashboardData = async () => {
       try {
@@ -95,7 +61,7 @@ export default function DashboardPage() {
         });
         if (equipmentRes.ok) {
           const data = await equipmentRes.json();
-          setEquipment(data.equipment || []);
+          setEquipment(data.equipment || data || []);
         }
 
         // Fetch favorite plates
@@ -104,7 +70,7 @@ export default function DashboardPage() {
         });
         if (favoritesRes.ok) {
           const data = await favoritesRes.json();
-          setFavorites(data.plates || []);
+          setFavorites(data.plates || data || []);
         }
 
         // Fetch saved recipes
@@ -113,7 +79,7 @@ export default function DashboardPage() {
         });
         if (recipesRes.ok) {
           const data = await recipesRes.json();
-          setRecipes(data.recipes || []);
+          setRecipes(data.recipes || data || []);
         }
 
       } catch (error) {
@@ -124,16 +90,25 @@ export default function DashboardPage() {
     };
 
     fetchDashboardData();
-  }, [token, user]);
+  }, [token, isAuthenticated]);
 
-  // Show loading until mounted AND we have user data
-  if (!mounted || !user) {
+  // Show loading while checking auth
+  if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading dashboard...</p>
+          <p className="text-gray-600">Loading...</p>
         </div>
+      </div>
+    );
+  }
+
+  // Don't render if not authenticated (redirect is happening)
+  if (!isAuthenticated || !user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
       </div>
     );
   }
