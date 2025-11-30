@@ -1,237 +1,429 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+'use client';
 
-export interface Plate {
-  id: string;
-  sku_code: string | null;
-  display_name: string | null;
-  thickness_mm: number;
-  hardness_shore: number | null;
-  imaging_type: string | null;
-  surface_type: string | null;
-  min_lpi: number | null;
-  max_lpi: number | null;
-  ink_compatibility: string[] | null;
-  substrate_categories: string[] | null;
-  applications: string[] | null;
-  family_name: string;
-  process_type: string | null;
-  supplier_name: string;
+import { useState, useEffect } from 'react';
+import { Search, Filter, RefreshCw, ChevronDown, ChevronUp, ExternalLink, FileText, Zap, Sparkles, Check } from 'lucide-react';
+import { api, Plate, Supplier } from '@/lib/api';
+
+function PlateDetailRow({ plate }: { plate: Plate }) {
+  const [expanded, setExpanded] = useState(false);
   
-  // NEW ENHANCED FIELDS
-  tonal_range_min_pct: number | null;
-  tonal_range_max_pct: number | null;
-  recommended_lpi: number | null;
-  max_imager_dpi: number | null;
-  flat_top_technology: string | null;
-  engineered_surface: boolean;
-  led_optimized: boolean;
-  key_differentiators: string[] | null;
-  substrate_detail: string | null;
-  product_sheet_url: string | null;
-  region_availability: string[] | null;
-  plate_generation: string | null;
-}
-
-export interface PlateEquivalent extends Plate {
-  similarity_score: number;
-  match_score: number;
-  match_notes: string[];
-  match_quality?: string;
-  match_details?: string[];
-}
-
-export interface EquivalencyResult {
-  source_plate: Plate;
-  equivalents: PlateEquivalent[];
-  total_candidates?: number;
-  good_matches_count?: number;
-}
-
-export interface Supplier {
-  id: string;
-  name: string;
-  website_url?: string | null;
-  country?: string | null;
-  is_plate_supplier?: boolean;
-  is_equipment_supplier?: boolean;
-}
-
-export interface ExposureResult {
-  plate: {
-    name: string;
-    thickness_mm: number;
-    supplier: string;
-    process_type: string;
+  const formatApplication = (app: string) => {
+    return app.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   };
-  exposure: {
-    back_exposure_time_s: number | null;
-    back_exposure_range_s: [number, number] | null;
-    main_exposure_time_s: number | null;
-    main_exposure_range_s: [number, number] | null;
-    post_exposure_time_s: number | null;
-    detack_time_s: number | null;
-  };
-  notes: string[];
-  input?: {
-    intensity_mw_cm2: number;
-    target_floor_mm: number | null;
-  };
+  
+  return (
+    <>
+      <tr 
+        className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <td className="py-3 px-4">
+          <div className="font-medium text-gray-900">
+            {plate.display_name || plate.family_name}
+          </div>
+          <div className="flex flex-wrap gap-1 mt-1">
+            {plate.flat_top_technology && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
+                {plate.flat_top_technology}
+              </span>
+            )}
+            {plate.led_optimized && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
+                <Zap className="w-3 h-3 mr-0.5" />
+                LED
+              </span>
+            )}
+            {plate.engineered_surface && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
+                <Sparkles className="w-3 h-3 mr-0.5" />
+                Eng. Surface
+              </span>
+            )}
+            {plate.plate_generation === 'new_2024' && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">
+                NEW
+              </span>
+            )}
+          </div>
+        </td>
+        <td className="py-3 px-4 text-gray-600">{plate.supplier_name}</td>
+        <td className="py-3 px-4 text-gray-600">{plate.thickness_mm} mm</td>
+        <td className="py-3 px-4 text-gray-600">{plate.hardness_shore || '—'}</td>
+        <td className="py-3 px-4">
+          <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${
+            plate.process_type === 'solvent' 
+              ? 'bg-purple-100 text-purple-700'
+              : plate.process_type === 'thermal'
+              ? 'bg-orange-100 text-orange-700'
+              : 'bg-blue-100 text-blue-700'
+          }`}>
+            {plate.process_type || plate.imaging_type || 'N/A'}
+          </span>
+        </td>
+        <td className="py-3 px-4">
+          <span className="text-xs text-gray-500">
+            {plate.surface_type?.replace('_', ' ') || '—'}
+          </span>
+        </td>
+        <td className="py-3 px-4 text-center">
+          {expanded ? (
+            <ChevronUp className="w-4 h-4 text-gray-400 inline" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-gray-400 inline" />
+          )}
+        </td>
+      </tr>
+      
+      {expanded && (
+        <tr className="bg-gray-50 border-b border-gray-200">
+          <td colSpan={7} className="py-4 px-6">
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-sm">
+                <div>
+                  <p className="text-gray-500">Imaging Type</p>
+                  <p className="font-medium">{plate.imaging_type || 'N/A'}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">LPI Range</p>
+                  <p className="font-medium">
+                    {plate.min_lpi && plate.max_lpi 
+                      ? `${plate.min_lpi} – ${plate.max_lpi}`
+                      : plate.recommended_lpi
+                      ? `Up to ${plate.recommended_lpi}`
+                      : 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Tonal Range</p>
+                  <p className="font-medium">
+                    {plate.tonal_range_min_pct != null && plate.tonal_range_max_pct != null
+                      ? `${plate.tonal_range_min_pct}% – ${plate.tonal_range_max_pct}%`
+                      : 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Max Imager DPI</p>
+                  <p className="font-medium">{plate.max_imager_dpi || 'N/A'}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Ink Compatibility</p>
+                  <p className="font-medium">
+                    {plate.ink_compatibility?.length 
+                      ? plate.ink_compatibility.join(', ')
+                      : 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Region</p>
+                  <p className="font-medium">
+                    {plate.region_availability?.length 
+                      ? plate.region_availability.join(', ')
+                      : 'Global'}
+                  </p>
+                </div>
+              </div>
+              
+              {plate.substrate_detail && (
+                <div>
+                  <p className="text-gray-500 text-sm">Substrate Suitability</p>
+                  <p className="text-sm text-gray-700">{plate.substrate_detail}</p>
+                </div>
+              )}
+              
+              {plate.key_differentiators && plate.key_differentiators.length > 0 && (
+                <div>
+                  <p className="text-gray-500 text-sm mb-2">Key Features</p>
+                  <ul className="grid grid-cols-1 md:grid-cols-2 gap-1">
+                    {plate.key_differentiators.map((diff, i) => (
+                      <li key={i} className="flex items-start text-sm text-gray-700">
+                        <Check className="w-4 h-4 text-green-500 mr-1.5 mt-0.5 flex-shrink-0" />
+                        {diff}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              
+              {plate.applications && plate.applications.length > 0 && (
+                <div>
+                  <p className="text-gray-500 text-sm mb-2">Applications</p>
+                  <div className="flex flex-wrap gap-1">
+                    {plate.applications.map((app, i) => (
+                      <span 
+                        key={i} 
+                        className="inline-flex px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs"
+                      >
+                        {formatApplication(app)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {plate.product_sheet_url && (
+                <div className="pt-2 border-t border-gray-200">
+                  
+                    href={plate.product_sheet_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <FileText className="w-4 h-4" />
+                    View Product Sheet (PDF)
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
 }
 
-export interface FilterOptions {
-  suppliers: string[];
-  process_types: string[];
-  surface_types: string[];
-  ink_types: string[];
-  applications: string[];
-  thickness_range: {
-    min: number;
-    max: number;
-  };
-}
-
-class ApiClient {
-  private baseUrl: string;
-
-  constructor() {
-    this.baseUrl = API_URL;
-  }
-
-  private async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`;
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      throw new Error(error.detail || `API error: ${response.status}`);
+export default function PlatesPage() {
+  const [plates, setPlates] = useState<Plate[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedSupplier, setSelectedSupplier] = useState('');
+  const [selectedProcess, setSelectedProcess] = useState('');
+  const [selectedThickness, setSelectedThickness] = useState('');
+  const [selectedSurface, setSelectedSurface] = useState('');
+  const [ledOptimizedOnly, setLedOptimizedOnly] = useState(false);
+  const [flatTopOnly, setFlatTopOnly] = useState(false);
+  const [hasProductSheetOnly, setHasProductSheetOnly] = useState(false);
+  
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [platesData, suppliersData] = await Promise.all([
+          api.getPlates({ limit: 300 }),
+          api.getSuppliers(true)
+        ]);
+        setPlates(platesData);
+        setSuppliers(suppliersData);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load plates');
+      } finally {
+        setLoading(false);
+      }
     }
-
-    return response.json();
-  }
-
-  // Health check
-  async health(): Promise<{ status: string; database: string }> {
-    return this.fetch('/health');
-  }
-
-  // Suppliers
-  async getSuppliers(plateOnly = true): Promise<Supplier[]> {
-    return this.fetch(`/api/suppliers`);
-  }
-
-  // Filter options
-  async getFilterOptions(): Promise<FilterOptions> {
-    return this.fetch('/api/filters');
-  }
-
-  // Plates - ENHANCED with new filter options
-  async getPlates(params?: {
-    supplier?: string;
-    family?: string;
-    thickness_mm?: number;
-    process_type?: string;
-    surface_type?: string;
-    led_optimized?: boolean;
-    flat_top_only?: boolean;
-    has_product_sheet?: boolean;
-    search?: string;
-    limit?: number;
-  }): Promise<Plate[]> {
-    const searchParams = new URLSearchParams();
-    if (params?.supplier) searchParams.set('supplier', params.supplier);
-    if (params?.family) searchParams.set('family', params.family);
-    if (params?.thickness_mm) searchParams.set('thickness', params.thickness_mm.toString());
-    if (params?.process_type) searchParams.set('process_type', params.process_type);
-    if (params?.surface_type) searchParams.set('surface_type', params.surface_type);
-    if (params?.led_optimized) searchParams.set('led_optimized', 'true');
-    if (params?.flat_top_only) searchParams.set('flat_top_only', 'true');
-    if (params?.has_product_sheet) searchParams.set('has_product_sheet', 'true');
-    if (params?.search) searchParams.set('search', params.search);
-    if (params?.limit) searchParams.set('limit', params.limit.toString());
+    loadData();
+  }, []);
+  
+  const thicknesses = Array.from(new Set(plates.map(p => p.thickness_mm))).sort((a, b) => a - b);
+  const surfaceTypes = Array.from(new Set(plates.map(p => p.surface_type).filter(Boolean)));
+  
+  const filteredPlates = plates.filter(plate => {
+    const matchesSearch = !searchTerm || 
+      plate.display_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      plate.family_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      plate.sku_code?.toLowerCase().includes(searchTerm.toLowerCase());
     
-    const query = searchParams.toString();
-    return this.fetch(`/api/plates${query ? `?${query}` : ''}`);
-  }
-
-  async getPlate(id: string): Promise<Plate> {
-    return this.fetch(`/api/plates/${id}`);
-  }
-
-  // Equivalency
-  async findEquivalents(params: {
-    source_plate_id: string;
-    target_supplier?: string;
-    substrate?: string;
-    ink_system?: string;
-    application?: string;
-  }): Promise<EquivalencyResult> {
-    const searchParams = new URLSearchParams();
-    searchParams.set('plate_id', params.source_plate_id);
-    if (params.target_supplier) searchParams.set('target_supplier', params.target_supplier);
+    const matchesSupplier = !selectedSupplier || plate.supplier_name === selectedSupplier;
+    const matchesProcess = !selectedProcess || plate.process_type === selectedProcess || plate.imaging_type === selectedProcess;
+    const matchesThickness = !selectedThickness || plate.thickness_mm === parseFloat(selectedThickness);
+    const matchesSurface = !selectedSurface || plate.surface_type === selectedSurface;
+    const matchesLed = !ledOptimizedOnly || plate.led_optimized;
+    const matchesFlatTop = !flatTopOnly || plate.flat_top_technology;
+    const matchesProductSheet = !hasProductSheetOnly || plate.product_sheet_url;
     
-    return this.fetch(`/api/equivalency/find?${searchParams}`);
+    return matchesSearch && matchesSupplier && matchesProcess && matchesThickness && 
+           matchesSurface && matchesLed && matchesFlatTop && matchesProductSheet;
+  });
+  
+  const supplierCounts = plates.reduce((acc, p) => {
+    acc[p.supplier_name] = (acc[p.supplier_name] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+  
+  const ledCount = plates.filter(p => p.led_optimized).length;
+  const flatTopCount = plates.filter(p => p.flat_top_technology).length;
+  const productSheetCount = plates.filter(p => p.product_sheet_url).length;
+  
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
   }
 
-  async quickEquivalency(plateId: string, targetSupplier?: string): Promise<EquivalencyResult> {
-    const params = new URLSearchParams({ plate_id: plateId });
-    if (targetSupplier) params.set('target_supplier', targetSupplier);
-    return this.fetch(`/api/equivalency/find?${params}`);
-  }
-
-  // Exposure calculator
-  async calculateExposure(params: {
-    plate_id: string;
-    current_intensity_mw_cm2: number;
-    equipment_instance_id?: string;
-    target_floor_mm?: number;
-  }): Promise<ExposureResult> {
-    return this.fetch('/api/exposure/calculate', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
-  }
-
-  async scaleExposure(params: {
-    reference_time_s: number;
-    reference_intensity: number;
-    current_intensity: number;
-  }): Promise<{
-    reference_time_s: number;
-    scaled_time_s: number;
-    intensity_change_percent: number;
-  }> {
-    const searchParams = new URLSearchParams({
-      reference_time_s: params.reference_time_s.toString(),
-      reference_intensity: params.reference_intensity.toString(),
-      current_intensity: params.current_intensity.toString(),
-    });
-    return this.fetch(`/api/exposure/scale?${searchParams}`);
-  }
-
-  // Plate families
-  async getFamilies(params?: {
-    supplier?: string;
-    process_type?: string;
-  }): Promise<Array<{
-    id: string;
-    family_name: string;
-    process_type: string;
-    supplier_name: string;
-    plate_count: number;
-  }>> {
-    const searchParams = new URLSearchParams();
-    if (params?.supplier) searchParams.set('supplier', params.supplier);
-    if (params?.process_type) searchParams.set('process_type', params.process_type);
-    
-    const query = searchParams.toString();
-    return this.fetch(`/api/families${query ? `?${query}` : ''}`);
-  }
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Plate Catalog</h2>
+          <p className="text-gray-600 mt-1">
+            {plates.length} plates from {Object.keys(supplierCounts).length} suppliers
+            {productSheetCount > 0 && (
+              <span className="ml-2 text-blue-600">• {productSheetCount} with product sheets</span>
+            )}
+          </p>
+        </div>
+        
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(supplierCounts).map(([supplier, count]) => (
+            <span 
+              key={supplier}
+              className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-gray-100 text-gray-700"
+            >
+              {supplier}: {count}
+            </span>
+          ))}
+        </div>
+      </div>
+      
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="flex items-center gap-2 mb-4">
+          <Filter className="w-4 h-4 text-gray-500" />
+          <span className="text-sm font-medium text-gray-700">Filters</span>
+        </div>
+        
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+          <div className="lg:col-span-2 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search plates..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+          
+          <select
+            value={selectedSupplier}
+            onChange={(e) => setSelectedSupplier(e.target.value)}
+            className="px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">All Suppliers</option>
+            {suppliers.map(s => (
+              <option key={s.id} value={s.name}>{s.name}</option>
+            ))}
+          </select>
+          
+          <select
+            value={selectedProcess}
+            onChange={(e) => setSelectedProcess(e.target.value)}
+            className="px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">All Processes</option>
+            <option value="solvent">Solvent</option>
+            <option value="thermal">Thermal</option>
+            <option value="digital">Digital</option>
+            <option value="analog">Analog</option>
+          </select>
+          
+          <select
+            value={selectedThickness}
+            onChange={(e) => setSelectedThickness(e.target.value)}
+            className="px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">All Thicknesses</option>
+            {thicknesses.map(t => (
+              <option key={t} value={t}>{t} mm</option>
+            ))}
+          </select>
+          
+          <select
+            value={selectedSurface}
+            onChange={(e) => setSelectedSurface(e.target.value)}
+            className="px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">All Surfaces</option>
+            {surfaceTypes.map(s => (
+              <option key={s} value={s}>{s?.replace('_', ' ')}</option>
+            ))}
+          </select>
+        </div>
+        
+        <div className="flex flex-wrap gap-3 mt-3 pt-3 border-t border-gray-100">
+          <label className="inline-flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={ledOptimizedOnly}
+              onChange={(e) => setLedOptimizedOnly(e.target.checked)}
+              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-700">
+              <Zap className="w-3 h-3 inline mr-1 text-green-600" />
+              LED Optimized ({ledCount})
+            </span>
+          </label>
+          
+          <label className="inline-flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={flatTopOnly}
+              onChange={(e) => setFlatTopOnly(e.target.checked)}
+              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-700">
+              Flat-Top Only ({flatTopCount})
+            </span>
+          </label>
+          
+          <label className="inline-flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={hasProductSheetOnly}
+              onChange={(e) => setHasProductSheetOnly(e.target.checked)}
+              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-700">
+              <FileText className="w-3 h-3 inline mr-1 text-blue-600" />
+              Has Product Sheet ({productSheetCount})
+            </span>
+          </label>
+        </div>
+      </div>
+      
+      <p className="text-sm text-gray-500">
+        Showing {filteredPlates.length} of {plates.length} plates
+      </p>
+      
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Plate</th>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Supplier</th>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Thickness</th>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Hardness</th>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Process</th>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Surface</th>
+                <th className="w-10"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredPlates.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-gray-500">
+                    No plates match your filters
+                  </td>
+                </tr>
+              ) : (
+                filteredPlates.map(plate => (
+                  <PlateDetailRow key={plate.id} plate={plate} />
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700">
+          {error}
+        </div>
+      )}
+    </div>
+  );
 }
-
-export const api = new ApiClient();
