@@ -1,47 +1,53 @@
 'use client';
 
 // frontend/src/app/register/page.tsx
+// ===================================
+// Registration page
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useAuth } from '../../context/AuthContext';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
 
 export default function RegisterPage() {
   const router = useRouter();
+  const { isLoading, isAuthenticated } = useAuth();
+  
   const [formData, setFormData] = useState({
     email: '',
     password: '',
     confirmPassword: '',
     first_name: '',
     last_name: '',
-    company_name: '',
-    job_title: ''
+    company_name: ''
   });
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
-  };
+  // Redirect if already logged in
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      router.push('/dashboard');
+    }
+  }, [isLoading, isAuthenticated, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     
-    // Validation
     if (formData.password !== formData.confirmPassword) {
       setError('Passwords do not match');
       return;
     }
     
-    if (formData.password.length < 8) {
-      setError('Password must be at least 8 characters');
+    if (formData.password.length < 6) {
+      setError('Password must be at least 6 characters');
       return;
     }
     
-    setLoading(true);
+    setSubmitting(true);
     
     try {
       const res = await fetch(`${API_BASE}/api/auth/register`, {
@@ -50,10 +56,9 @@ export default function RegisterPage() {
         body: JSON.stringify({
           email: formData.email,
           password: formData.password,
-          first_name: formData.first_name || null,
-          last_name: formData.last_name || null,
-          company_name: formData.company_name || null,
-          job_title: formData.job_title || null
+          first_name: formData.first_name || undefined,
+          last_name: formData.last_name || undefined,
+          company_name: formData.company_name || undefined
         })
       });
       
@@ -64,34 +69,48 @@ export default function RegisterPage() {
       
       const data = await res.json();
       
-      // Save to localStorage
+      // Save auth data
       localStorage.setItem('flexoplate_token', data.access_token);
       localStorage.setItem('flexoplate_user', JSON.stringify(data.user));
       
-      // Redirect
-      router.push('/');
+      // Redirect to dashboard
+      window.location.href = '/dashboard';
+      
     } catch (err: any) {
       setError(err.message || 'Registration failed');
-    } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
+
+  // Show loading while checking auth
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  // Don't show form if already authenticated
+  if (isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4">
       <div className="max-w-md w-full space-y-8">
-        {/* Header */}
         <div className="text-center">
-          <div className="flex justify-center mb-4">
-            <div className="w-12 h-12 bg-blue-500 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold text-xl">FP</span>
-            </div>
+          <div className="w-16 h-16 bg-blue-500 rounded-xl flex items-center justify-center mx-auto mb-4">
+            <span className="text-white font-bold text-2xl">FP</span>
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">FlexoPlate IQ</h1>
-          <h2 className="mt-2 text-xl text-gray-600">Create your free account</h2>
+          <h1 className="text-3xl font-bold text-gray-900">Create Account</h1>
+          <h2 className="mt-2 text-gray-600">Join FlexoPlate IQ for free</h2>
         </div>
         
-        {/* Form */}
         <form className="mt-8 space-y-4 bg-white p-8 rounded-lg shadow" onSubmit={handleSubmit}>
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-lg text-sm">
@@ -99,154 +118,130 @@ export default function RegisterPage() {
             </div>
           )}
           
-          {/* Required fields */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="first_name" className="block text-sm font-medium text-gray-700 mb-1">
+                First Name
+              </label>
+              <input
+                id="first_name"
+                type="text"
+                value={formData.first_name}
+                onChange={(e) => setFormData({...formData, first_name: e.target.value})}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                placeholder="John"
+                disabled={submitting}
+              />
+            </div>
+            <div>
+              <label htmlFor="last_name" className="block text-sm font-medium text-gray-700 mb-1">
+                Last Name
+              </label>
+              <input
+                id="last_name"
+                type="text"
+                value={formData.last_name}
+                onChange={(e) => setFormData({...formData, last_name: e.target.value})}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                placeholder="Doe"
+                disabled={submitting}
+              />
+            </div>
+          </div>
+          
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Email address <span className="text-red-500">*</span>
+            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+              Email address *
             </label>
             <input
+              id="email"
               type="email"
-              name="email"
               required
               value={formData.email}
-              onChange={handleChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-              placeholder="you@company.com"
+              onChange={(e) => setFormData({...formData, email: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              placeholder="you@example.com"
+              disabled={submitting}
             />
           </div>
           
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Password <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="password"
-                name="password"
-                required
-                minLength={8}
-                value={formData.password}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                placeholder="••••••••"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Confirm <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="password"
-                name="confirmPassword"
-                required
-                value={formData.confirmPassword}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                placeholder="••••••••"
-              />
-            </div>
-          </div>
-          
-          {/* Divider */}
-          <div className="relative py-2">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-200" />
-            </div>
-            <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-white text-gray-400">Optional - complete later</span>
-            </div>
-          </div>
-          
-          {/* Optional fields */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                First name
-              </label>
-              <input
-                type="text"
-                name="first_name"
-                value={formData.first_name}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Last name
-              </label>
-              <input
-                type="text"
-                name="last_name"
-                value={formData.last_name}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-              />
-            </div>
-          </div>
-          
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Company name
+            <label htmlFor="company" className="block text-sm font-medium text-gray-700 mb-1">
+              Company Name
             </label>
             <input
+              id="company"
               type="text"
-              name="company_name"
               value={formData.company_name}
-              onChange={handleChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-              placeholder="Your company"
+              onChange={(e) => setFormData({...formData, company_name: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              placeholder="Acme Printing Co."
+              disabled={submitting}
+            />
+          </div>
+
+          <div>
+            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+              Password *
+            </label>
+            <input
+              id="password"
+              type="password"
+              required
+              value={formData.password}
+              onChange={(e) => setFormData({...formData, password: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              placeholder="••••••••"
+              disabled={submitting}
             />
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Job title
+            <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-1">
+              Confirm Password *
             </label>
-            <select
-              name="job_title"
-              value={formData.job_title}
-              onChange={handleChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
-            >
-              <option value="">Select your role...</option>
-              <option value="Prepress Operator">Prepress Operator</option>
-              <option value="Plate Room Technician">Plate Room Technician</option>
-              <option value="Prepress Manager">Prepress Manager</option>
-              <option value="Production Manager">Production Manager</option>
-              <option value="Press Operator">Press Operator</option>
-              <option value="Quality Manager">Quality Manager</option>
-              <option value="Owner/Director">Owner/Director</option>
-              <option value="Other">Other</option>
-            </select>
+            <input
+              id="confirmPassword"
+              type="password"
+              required
+              value={formData.confirmPassword}
+              onChange={(e) => setFormData({...formData, confirmPassword: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              placeholder="••••••••"
+              disabled={submitting}
+            />
           </div>
-          
+
           <button
             type="submit"
-            disabled={loading}
-            className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg transition-colors mt-6"
+            disabled={submitting}
+            className="w-full py-3 px-4 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? 'Creating account...' : 'Create account'}
+            {submitting ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                Creating account...
+              </span>
+            ) : (
+              'Create Account'
+            )}
           </button>
-          
-          <p className="text-center text-sm text-gray-600">
+
+          <div className="text-center text-sm text-gray-600">
             Already have an account?{' '}
-            <Link href="/login" className="text-blue-500 hover:underline font-medium">
+            <Link href="/login" className="text-blue-600 hover:text-blue-700 font-medium">
               Sign in
             </Link>
-          </p>
+          </div>
         </form>
-        
-        {/* Benefits */}
-        <div className="bg-blue-50 border border-blue-100 p-4 rounded-lg">
-          <h3 className="font-medium text-blue-800 mb-2">Account benefits:</h3>
-          <ul className="text-sm text-blue-700 space-y-1">
-            <li>✓ Save your equipment with lamp age tracking</li>
-            <li>✓ Create favorite plates list</li>
-            <li>✓ Save recipes for customers/jobs</li>
-            <li>✓ Unlimited calculations</li>
-            <li>✓ Export history and reports</li>
-          </ul>
+
+        <div className="text-center">
+          <Link href="/" className="text-sm text-gray-500 hover:text-gray-700">
+            ← Continue as guest
+          </Link>
         </div>
       </div>
     </div>
