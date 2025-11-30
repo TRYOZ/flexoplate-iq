@@ -86,8 +86,8 @@ function Header() {
               </Link>
             )}
             <Link 
-              href="/" 
-              className={`px-3 py-2 rounded-lg text-sm ${pathname === '/' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+              href="/equivalency" 
+              className={`px-3 py-2 rounded-lg text-sm ${pathname === '/equivalency' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
             >
               Equivalency
             </Link>
@@ -208,7 +208,7 @@ function Header() {
                 </Link>
               )}
               <Link 
-                href="/" 
+                href="/equivalency" 
                 className="px-3 py-2 text-gray-600 hover:bg-gray-50 rounded-lg"
                 onClick={() => setMenuOpen(false)}
               >
