@@ -89,7 +89,7 @@ async def get_predicted_tvi_direct(
             JOIN fingerprints f ON t.fingerprint_id = f.id
             WHERE f.plate_supplier = $1 
               AND f.plate_family = $2 
-              AND f.plate_thickness_mm = $3
+              AND ABS(f.plate_thickness_mm - $3) < 0.01
         """
         params = [supplier, family, thickness]
         param_idx = 4
@@ -135,7 +135,7 @@ async def get_suggested_dgc_direct(
             SELECT d.channel, d.input_pct, AVG(d.output_pct) as avg_output
             FROM dgc_curves d
             JOIN fingerprints f ON d.fingerprint_id = f.id
-            WHERE f.plate_supplier = $1 AND f.plate_family = $2 AND f.plate_thickness_mm = $3
+            WHERE f.plate_supplier = $1 AND f.plate_family = $2 AND ABS(f.plate_thickness_mm - $3) < 0.01
         """
         params = [supplier, family, thickness]
         param_idx = 4
@@ -175,7 +175,7 @@ async def find_similar_plates_direct(pool, supplier: str, family: str, thickness
                 AVG(CASE WHEN t.channel = 'K' AND t.nominal_pct = 50 THEN t.measured_pct - 50 END) as dg_k
             FROM tvi_curves t
             JOIN fingerprints f ON t.fingerprint_id = f.id
-            WHERE f.plate_supplier = $1 AND f.plate_family = $2 AND f.plate_thickness_mm = $3
+            WHERE f.plate_supplier = $1 AND f.plate_family = $2 AND ABS(f.plate_thickness_mm - $3) < 0.01
         """, supplier, family, thickness)
         
         if not ref_stats or ref_stats['dg_c'] is None:
@@ -195,7 +195,7 @@ async def find_similar_plates_direct(pool, supplier: str, family: str, thickness
                     COUNT(DISTINCT f.id) as sample_count
                 FROM tvi_curves t
                 JOIN fingerprints f ON t.fingerprint_id = f.id
-                WHERE NOT (f.plate_supplier = $1 AND f.plate_family = $2 AND f.plate_thickness_mm = $3)
+                WHERE NOT (f.plate_supplier = $1 AND f.plate_family = $2 AND ABS(f.plate_thickness_mm - $3) < 0.01)
                 GROUP BY f.plate_supplier, f.plate_family, f.plate_thickness_mm
             )
             SELECT *,
@@ -301,7 +301,7 @@ async def get_plate_statistics(
                 AVG(CASE WHEN t.channel = 'K' AND t.nominal_pct = 50 THEN t.measured_pct - 50 END) as avg_dg_k
             FROM fingerprints f
             LEFT JOIN tvi_curves t ON t.fingerprint_id = f.id
-            WHERE f.plate_supplier = $1 AND f.plate_family = $2 AND f.plate_thickness_mm = $3
+            WHERE f.plate_supplier = $1 AND f.plate_family = $2 AND ABS(f.plate_thickness_mm - $3) < 0.01
             GROUP BY f.plate_supplier, f.plate_family, f.plate_thickness_mm
         """, supplier, family, thickness)
     
