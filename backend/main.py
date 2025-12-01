@@ -21,7 +21,8 @@ try:
     from jose import JWTError, jwt
 except ImportError:
     from python_jose import JWTError, jwt
-
+from intelligence_routes import intelligence_router
+import intelligence_routes
 # ============================================================
 # APP SETUP
 # ============================================================
@@ -34,7 +35,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+app.include_router(intelligence_router)
 # ============================================================
 # CONFIGURATION
 # ============================================================
@@ -50,6 +51,7 @@ pool: asyncpg.Pool = None
 async def startup():
     global pool
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+    intelligence_routes._pool = pool
 
 @app.on_event("shutdown")
 async def shutdown():
