@@ -21,7 +21,8 @@ try:
     from jose import JWTError, jwt
 except ImportError:
     from python_jose import JWTError, jwt
-
+from intelligence_routes import intelligence_router
+import intelligence_routes
 # ============================================================
 # APP SETUP
 # ============================================================
@@ -34,7 +35,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(intelligence_router)
+```
 
+5. Click **"Commit changes"** (green button)
+
+---
+
+## Step 4C: Upload intelligence_routes.py
+
+1. Go to your repository main page
+2. Click **"Add file"** → **"Upload files"**
+3. Drag and drop `intelligence_routes.py` from:
+```
+   C:\Users\oeztu\Downloads\flexoplate_integration\flexoplate_integration\intelligence_routes.py
 # ============================================================
 # CONFIGURATION
 # ============================================================
@@ -50,6 +64,7 @@ pool: asyncpg.Pool = None
 async def startup():
     global pool
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+    intelligence_routes._pool = pool
 
 @app.on_event("shutdown")
 async def shutdown():
