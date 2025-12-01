@@ -21,8 +21,7 @@ try:
     from jose import JWTError, jwt
 except ImportError:
     from python_jose import JWTError, jwt
-from intelligence_routes import intelligence_router
-import intelligence_routes
+
 # ============================================================
 # APP SETUP
 # ============================================================
@@ -35,20 +34,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(intelligence_router)
-```
 
-5. Click **"Commit changes"** (green button)
-
----
-
-## Step 4C: Upload intelligence_routes.py
-
-1. Go to your repository main page
-2. Click **"Add file"** → **"Upload files"**
-3. Drag and drop `intelligence_routes.py` from:
-```
-   C:\Users\oeztu\Downloads\flexoplate_integration\flexoplate_integration\intelligence_routes.py
 # ============================================================
 # CONFIGURATION
 # ============================================================
@@ -64,7 +50,6 @@ pool: asyncpg.Pool = None
 async def startup():
     global pool
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
-    intelligence_routes._pool = pool
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -290,7 +275,6 @@ async def get_plates(
                 "max_lpi": r['max_lpi'],
                 "ink_compatibility": r['ink_compatibility'] or [],
                 "applications": r['applications'] or [],
-                # NEW FIELDS
                 "tonal_range_min_pct": float(r['tonal_range_min_pct']) if r['tonal_range_min_pct'] else None,
                 "tonal_range_max_pct": float(r['tonal_range_max_pct']) if r['tonal_range_max_pct'] else None,
                 "recommended_lpi": r['recommended_lpi'],
@@ -303,7 +287,6 @@ async def get_plates(
                 "product_sheet_url": r['product_sheet_url'],
                 "region_availability": r['region_availability'] or [],
                 "plate_generation": r['plate_generation'] or 'current',
-                # Family info
                 "family_name": r['family_name'],
                 "process_type": r['process_type'] or r['imaging_type'],
                 "supplier_name": r['supplier_name'],
@@ -336,7 +319,6 @@ async def get_plate(plate_id: str):
             "max_lpi": row['max_lpi'],
             "ink_compatibility": row['ink_compatibility'] or [],
             "applications": row['applications'] or [],
-            # NEW FIELDS
             "tonal_range_min_pct": float(row['tonal_range_min_pct']) if row['tonal_range_min_pct'] else None,
             "tonal_range_max_pct": float(row['tonal_range_max_pct']) if row['tonal_range_max_pct'] else None,
             "recommended_lpi": row['recommended_lpi'],
@@ -349,7 +331,6 @@ async def get_plate(plate_id: str):
             "product_sheet_url": row['product_sheet_url'],
             "region_availability": row['region_availability'] or [],
             "plate_generation": row['plate_generation'] or 'current',
-            # Family info
             "family_name": row['family_name'],
             "process_type": row['process_type'] or row['imaging_type'],
             "supplier_name": row['supplier_name'],
@@ -366,18 +347,6 @@ async def find_equivalent_plates(
     exclude_same_supplier: bool = True,
     limit: int = 20
 ):
-    """
-    Find equivalent plates from other suppliers.
-    
-    Scoring weights (100 point scale):
-    - Thickness match (within 0.05mm): 30 points
-    - Hardness match (within 2 Shore): 25 points  
-    - Surface type match: 25 points (CRITICAL - mismatch = -15)
-    - Imaging type match: 20 points
-    
-    100% = perfect match on all criteria
-    <70% = Not recommended as equivalent
-    """
     async with pool.acquire() as conn:
         source = await conn.fetchrow("""
             SELECT p.*, s.name as supplier_name, s.id as supplier_id
@@ -394,19 +363,16 @@ async def find_equivalent_plates(
         params = [uuid.UUID(plate_id)]
         idx = 2
         
-        # MUST match by thickness (within 0.15mm tolerance for initial filter)
         if source['thickness_mm']:
             conditions.append(f"ABS(p.thickness_mm - ${idx}) < 0.15")
             params.append(source['thickness_mm'])
             idx += 1
         
-        # Exclude same supplier by default (we want alternatives!)
         if exclude_same_supplier and source['supplier_id']:
             conditions.append(f"pf.supplier_id != ${idx}")
             params.append(source['supplier_id'])
             idx += 1
         
-        # Filter by target supplier if specified
         if target_supplier:
             conditions.append(f"LOWER(s.name) LIKE ${idx}")
             params.append(f"%{target_supplier.lower()}%")
@@ -431,7 +397,6 @@ async def find_equivalent_plates(
             score = 0
             match_details = []
             
-            # 1. THICKNESS (30 points) - Most critical
             if source['thickness_mm'] and cand['thickness_mm']:
                 diff = abs(float(source['thickness_mm']) - float(cand['thickness_mm']))
                 if diff <= 0.02:
@@ -447,7 +412,6 @@ async def find_equivalent_plates(
                     score += 5
                     match_details.append("thickness: different")
             
-            # 2. HARDNESS (25 points)
             if source['hardness_shore'] and cand['hardness_shore']:
                 diff = abs(float(source['hardness_shore']) - float(cand['hardness_shore']))
                 if diff <= 1:
@@ -465,11 +429,9 @@ async def find_equivalent_plates(
                 else:
                     match_details.append("hardness: mismatch")
             else:
-                # Unknown hardness - partial credit
                 score += 10
                 match_details.append("hardness: unknown")
             
-            # 3. SURFACE TYPE (25 points) - CRITICAL for print quality
             source_surface = (source['surface_type'] or '').lower().strip()
             cand_surface = (cand['surface_type'] or '').lower().strip()
             
@@ -478,14 +440,12 @@ async def find_equivalent_plates(
                     score += 25
                     match_details.append("surface: match")
                 else:
-                    # PENALTY for surface mismatch - this is critical!
                     score -= 10
                     match_details.append(f"surface: MISMATCH ({source_surface} vs {cand_surface})")
             else:
-                score += 10  # Unknown - partial credit
+                score += 10
                 match_details.append("surface: unknown")
             
-            # 4. IMAGING TYPE (20 points)
             source_imaging = (source['imaging_type'] or '').lower().strip()
             cand_imaging = (cand['imaging_type'] or '').lower().strip()
             
@@ -494,17 +454,14 @@ async def find_equivalent_plates(
                     score += 20
                     match_details.append("imaging: match")
                 else:
-                    # Digital vs Analog is a significant difference
                     score -= 5
                     match_details.append(f"imaging: MISMATCH")
             else:
                 score += 8
                 match_details.append("imaging: unknown")
             
-            # Clamp score between 0 and 100
             final_score = max(0, min(100, score))
             
-            # Determine quality label
             if final_score >= 90:
                 quality = "Excellent"
             elif final_score >= 75:
@@ -534,10 +491,7 @@ async def find_equivalent_plates(
                 "match_details": match_details
             })
         
-        # Sort by score descending
         scored.sort(key=lambda x: x['match_score'], reverse=True)
-        
-        # Only return plates with score >= 50 (at least "Fair" matches)
         good_matches = [s for s in scored if s['match_score'] >= 50]
         
         return {
@@ -557,8 +511,6 @@ async def find_equivalent_plates(
 
 # ============================================================
 # EXPOSURE CALCULATOR
-# Using: main_exposure_energy_min_mj_cm2, main_exposure_energy_max_mj_cm2
-#        back_exposure_energy_min_mj_cm2, back_exposure_energy_max_mj_cm2
 # ============================================================
 @app.post("/api/exposure/calculate")
 async def calculate_exposure(data: ExposureCalculateRequest):
@@ -568,7 +520,6 @@ async def calculate_exposure(data: ExposureCalculateRequest):
         if not plate:
             raise HTTPException(status_code=404, detail="Plate not found")
         
-        # Use average of min/max energy if available
         main_energy_min = plate.get('main_exposure_energy_min_mj_cm2') or 800
         main_energy_max = plate.get('main_exposure_energy_max_mj_cm2') or 1200
         back_energy_min = plate.get('back_exposure_energy_min_mj_cm2') or 150
@@ -577,11 +528,9 @@ async def calculate_exposure(data: ExposureCalculateRequest):
         main_energy = (float(main_energy_min) + float(main_energy_max)) / 2
         back_energy = (float(back_energy_min) + float(back_energy_max)) / 2
         
-        # Calculate time: Energy (mJ/cm²) / Intensity (mW/cm²) = Time (seconds)
         main_time_s = int(main_energy / data.current_intensity_mw_cm2)
         back_time_s = int(back_energy / data.current_intensity_mw_cm2)
         
-        # Clamp to reasonable values
         main_time_s = max(30, min(main_time_s, 1800))
         back_time_s = max(10, min(back_time_s, 600))
         
@@ -641,7 +590,6 @@ async def get_my_plates(user: dict = Depends(get_current_user_required)):
 @app.post("/api/me/plates/{plate_id}")
 async def add_favorite_plate(plate_id: str, user: dict = Depends(get_current_user_required)):
     async with pool.acquire() as conn:
-        # Check limit
         count = await conn.fetchval("SELECT COUNT(*) FROM user_favorite_plates WHERE user_id = $1", user['id'])
         max_limit = user.get('max_plates') or 5
         if count >= max_limit:
@@ -699,7 +647,6 @@ async def get_my_equipment(user: dict = Depends(get_current_user_required)):
 @app.post("/api/me/equipment")
 async def add_my_equipment(data: EquipmentAdd, user: dict = Depends(get_current_user_required)):
     async with pool.acquire() as conn:
-        # Check limit
         count = await conn.fetchval("SELECT COUNT(*) FROM user_equipment WHERE user_id = $1 AND is_active = TRUE", user['id'])
         max_limit = user.get('max_equipment') or 2
         if count >= max_limit:
@@ -796,7 +743,6 @@ async def get_my_recipes(user: dict = Depends(get_current_user_required)):
 @app.post("/api/me/recipes")
 async def save_recipe(data: RecipeSave, user: dict = Depends(get_current_user_required)):
     async with pool.acquire() as conn:
-        # Check limit
         count = await conn.fetchval("SELECT COUNT(*) FROM saved_recipes WHERE user_id = $1 AND is_active = TRUE", user['id'])
         max_limit = user.get('max_recipes') or 5
         if count >= max_limit:
@@ -887,13 +833,11 @@ async def get_my_limits(user: dict = Depends(get_current_user_required)):
 # ============================================================
 @app.get("/api/filters")
 async def get_filter_options():
-    """Get available filter options for UI dropdowns"""
     async with pool.acquire() as conn:
         suppliers = await conn.fetch("SELECT DISTINCT name FROM suppliers ORDER BY name")
         process_types = await conn.fetch("SELECT DISTINCT process_type FROM plate_families WHERE process_type IS NOT NULL ORDER BY process_type")
         surface_types = await conn.fetch("SELECT DISTINCT surface_type FROM plates WHERE surface_type IS NOT NULL ORDER BY surface_type")
         
-        # Get unique ink types from arrays
         ink_types = await conn.fetch("""
             SELECT DISTINCT unnest(ink_compatibility) as ink_type 
             FROM plates 
@@ -901,7 +845,6 @@ async def get_filter_options():
             ORDER BY ink_type
         """)
         
-        # Get unique applications from arrays
         applications = await conn.fetch("""
             SELECT DISTINCT unnest(applications) as application 
             FROM plates 
@@ -909,7 +852,6 @@ async def get_filter_options():
             ORDER BY application
         """)
         
-        # Get thickness range
         thickness_range = await conn.fetchrow("""
             SELECT MIN(thickness_mm) as min_thickness, MAX(thickness_mm) as max_thickness
             FROM plates WHERE thickness_mm IS NOT NULL
