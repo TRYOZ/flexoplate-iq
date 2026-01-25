@@ -11,7 +11,7 @@ import {
   Minimize2,
   Maximize2,
   Sparkles,
-  ChevronDown,
+  RotateCcw,
 } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -90,6 +90,7 @@ export default function FlexoBrainChat({
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(true);
+  const [threadId, setThreadId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -116,6 +117,13 @@ export default function FlexoBrainChat({
       handleSend(initialMessage);
     }
   }, [initialMessage]);
+
+  // Start new conversation
+  const handleNewConversation = () => {
+    setMessages([]);
+    setThreadId(null);
+    setShowSuggestions(true);
+  };
 
   const handleSend = async (messageText?: string) => {
     const text = messageText || inputValue.trim();
@@ -144,8 +152,8 @@ export default function FlexoBrainChat({
             role: m.role,
             content: m.content,
           })),
+          thread_id: threadId, // Include thread ID for continuation
           context: context,
-          stream: false,
         }),
       });
 
@@ -154,6 +162,11 @@ export default function FlexoBrainChat({
       }
 
       const data = await response.json();
+
+      // Save thread ID for future messages
+      if (data.thread_id) {
+        setThreadId(data.thread_id);
+      }
 
       const assistantMessage: Message = {
         id: `assistant-${Date.now()}`,
@@ -193,8 +206,6 @@ export default function FlexoBrainChat({
       get_plate_details: 'Retrieved plate details',
       calculate_exposure: 'Calculated exposure',
       get_equipment_info: 'Retrieved equipment info',
-      troubleshoot_issue: 'Analyzed issue',
-      search_knowledge_base: 'Searched knowledge base',
     };
 
     return toolNames[toolCall.tool] || toolCall.tool;
@@ -251,6 +262,15 @@ export default function FlexoBrainChat({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {messages.length > 0 && (
+            <button
+              onClick={handleNewConversation}
+              className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+              title="New conversation"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+          )}
           <button
             onClick={() => setIsMinimized(true)}
             className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
@@ -268,6 +288,15 @@ export default function FlexoBrainChat({
         </div>
       </div>
 
+      {/* Thread indicator */}
+      {threadId && (
+        <div className="px-4 py-1.5 bg-blue-50 border-b border-blue-100 flex items-center justify-between">
+          <span className="text-xs text-blue-600">
+            Conversation active - FlexoBrain remembers context
+          </span>
+        </div>
+      )}
+
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
         {/* Welcome message */}
@@ -281,7 +310,7 @@ export default function FlexoBrainChat({
             </h4>
             <p className="text-sm text-gray-600 mb-4">
               Your AI expert for flexographic plates, processing, equipment, and
-              troubleshooting. How can I help you today?
+              troubleshooting. I remember our conversation context!
             </p>
 
             {/* Suggested questions */}
@@ -412,7 +441,7 @@ export default function FlexoBrainChat({
           </button>
         </div>
         <p className="text-xs text-gray-400 mt-2 text-center">
-          FlexoBrain may make mistakes. Verify important information.
+          Powered by OpenAI Assistants API
         </p>
       </div>
     </div>

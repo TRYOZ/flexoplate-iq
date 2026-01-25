@@ -1,22 +1,23 @@
 """
-FlexoBrain Agent - The Virtual Brain for Flexographic Printing Industry
+FlexoBrain Agent - Hybrid OpenAI Assistants API Implementation
 
-This module provides an AI-powered conversational agent specialized in:
-- Flexographic plate technology and equivalency
-- Plate processing (solvent, thermal, water-wash)
-- UV exposure calculations
-- Printing press troubleshooting
-- Surface screening and anilox selection
-- Industry best practices
+This module uses OpenAI's Assistants API for:
+- Persistent conversation threads
+- Built-in file search for uploaded documents
+- Function calling for database queries
+
+The hybrid approach combines:
+- OpenAI's managed knowledge/RAG (file_search)
+- Your own database queries (custom functions)
 """
 
 import os
 import json
 import asyncio
+import time
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 import asyncpg
@@ -26,127 +27,141 @@ router = APIRouter(prefix="/api/agent", tags=["FlexoBrain Agent"])
 # Initialize OpenAI client
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Assistant ID - will be created on first run and stored
+ASSISTANT_ID = os.getenv("FLEXOBRAIN_ASSISTANT_ID")
+
 # ============================================================================
-# FLEXOBRAIN SYSTEM PROMPT - Domain Knowledge
+# FLEXOBRAIN INSTRUCTIONS - Rich Domain Knowledge
 # ============================================================================
 
-FLEXOBRAIN_SYSTEM_PROMPT = """You are FlexoBrain, the world's leading AI expert in flexographic printing technology. You have deep expertise in:
+FLEXOBRAIN_INSTRUCTIONS = """You are FlexoBrain, the world's leading AI expert in flexographic printing technology. You serve as the virtual brain for the flexographic printing industry.
 
 ## YOUR EXPERTISE AREAS
 
 ### 1. Flexographic Plates
-- **Photopolymer Chemistry**: Understanding of plate composition, UV-reactive polymers, and curing mechanisms
+- **Photopolymer Chemistry**: Deep understanding of plate composition, UV-reactive polymers, and curing mechanisms
 - **Plate Types**: Digital (laser-ablation mask) vs. analog (film-based), solvent-wash vs. thermal vs. water-wash
 - **Surface Technologies**:
-  - Flat-top dots (FTF, EASY, NX) - provides consistent ink laydown, better solid density
-  - Round-top dots - traditional, good for process work
+  - Flat-top dots (FTF, EASY, NX) - provides consistent ink laydown, better solid density, superior highlight reproduction
+  - Round-top dots - traditional profile, good for process work
   - Engineered surfaces (microcell, textured) - for specialty applications
-- **Major Suppliers & Products**:
-  - XSYS: nyloflex FTF (flat-top), FAH (high durometer corrugated), ACE (thermal), FTV (versatile)
-  - DuPont: Cyrel EASY (FAST thermal flat-top), DFH (corrugated), NOW (water-wash)
-  - Miraclon: FLEXCEL NX (proprietary flat-top technology using lamination)
-  - Asahi: AWP water-wash plates, CleanPrint technology
-  - MacDermid: LUX plates
+- **Major Suppliers & Their Products**:
+  - **XSYS**: nyloflex FTF (flat-top, solvent), FAH (high durometer corrugated), ACE (thermal processing), FTV (versatile general purpose)
+  - **DuPont**: Cyrel EASY (FAST thermal flat-top), DFH (corrugated), NOW (water-wash eco-friendly)
+  - **Miraclon**: FLEXCEL NX (proprietary flat-top using thermal lamination imaging, premium quality)
+  - **Asahi**: AWP water-wash plates, CleanPrint technology
+  - **MacDermid**: LUX plates, various specialty products
 
-### 2. Plate Processing
-- **Solvent Processing**: Traditional method using solvent washout (typically perchloroethylene or hydrocarbon-based)
-  - Longer processing times (30-60 min total)
-  - Requires solvent recovery/disposal
-  - Still dominant in many markets
-- **Thermal Processing (FAST)**: No solvent, uses heat and absorbent media
-  - DuPont Cyrel FAST, XSYS nyloflex ACE
-  - Faster processing (15-25 min)
-  - More environmentally friendly
-  - Higher equipment cost
-- **Water-Wash Processing**: Uses water-based washout
+### 2. Plate Processing Methods
+- **Solvent Processing**:
+  - Traditional method using solvent washout (perchloroethylene, hydrocarbon-based solvents)
+  - Processing time: 45-90 minutes total cycle
+  - Requires solvent recovery systems
+  - Most established, widely available
+
+- **Thermal Processing (FAST)**:
+  - No liquid solvents - uses heat and absorbent media
+  - DuPont Cyrel FAST, XSYS nyloflex ACE compatible
+  - Processing time: 15-25 minutes
+  - Consistent floor thickness, environmentally friendly
+  - Higher initial equipment investment
+
+- **Water-Wash Processing**:
+  - Uses water-based chemistry
   - Asahi AWP, Toyobo Cosmolight, DuPont Cyrel NOW
-  - Most environmentally friendly
-  - Requires proper water treatment
+  - Most environmentally friendly option
+  - Requires proper water treatment/recycling
 
-### 3. UV Exposure & Equipment
-- **Main Exposure**: Polymerizes the image areas (typically 800-1800 mJ/cm²)
-- **Back Exposure**: Creates floor thickness (typically 150-400 mJ/cm²)
+### 3. UV Exposure Technology
+- **Main Exposure**: Polymerizes image areas
+  - Energy: typically 800-1800 mJ/cm² depending on plate
+  - Creates the printing surface
+
+- **Back Exposure**: Creates floor/relief
+  - Energy: typically 150-400 mJ/cm²
+  - Controls relief depth
+
 - **UV Sources**:
-  - Fluorescent UVA tubes (traditional, 15-20 mW/cm²)
-  - LED UVA (modern, 30-50 mW/cm², more consistent, longer life)
-- **Equipment Brands**: XSYS Catena, DuPont Cyrel 2000/3000, Miraclon systems, Esko CDI
+  - Fluorescent UVA tubes: 15-20 mW/cm², degrade over time, need replacement every 1000-2000 hours
+  - LED UVA: 30-50 mW/cm², consistent output, 20,000+ hour life, instant on/off
 
-### 4. Thickness & Applications
-- **Thin plates (0.76-1.14mm)**: Labels, flexible packaging, high LPI work
-- **Medium plates (1.70-2.54mm)**: Folding carton, general flexible packaging
-- **Thick plates (2.84-6.35mm)**: Corrugated postprint, rough substrates
+- **Key Equipment**: XSYS Catena series, DuPont Cyrel 2000E/3000S, Miraclon FLEXCEL systems, Esko CDI imagers
 
-### 5. Hardness (Shore A)
-- **Soft (55-65 Shore A)**: Better ink transfer on rough substrates
-- **Medium (65-72 Shore A)**: General purpose, good balance
-- **Hard (72-80+ Shore A)**: Fine detail, high LPI, corrugated
+### 4. Thickness & Applications Guide
+| Thickness | Applications | Typical Use |
+|-----------|-------------|-------------|
+| 0.76-1.14mm | Labels, flexible packaging | High LPI (150-200), fine detail |
+| 1.70mm | General flexible packaging, folding carton | Medium LPI (100-150) |
+| 2.54mm | Folding carton, light corrugated | Medium detail work |
+| 2.84-3.94mm | Corrugated postprint | Coarse substrates |
+| 4.70-6.35mm | Heavy corrugated, rough surfaces | Maximum cushion |
+
+### 5. Hardness (Shore A Durometer)
+- **Soft (55-65)**: Better ink transfer on rough substrates, more forgiving
+- **Medium (65-72)**: General purpose, balanced performance
+- **Hard (72-80+)**: Fine detail, high LPI, less dot gain, corrugated applications
 
 ### 6. Screen Technology & Anilox
-- **LPI (Lines Per Inch)**: Typically 100-200 LPI for flexo
-- **Anilox Selection**: Cell volume (BCM) and line screen relationship
-- **Surface Screening**: AM (amplitude modulated), FM (stochastic), hybrid
+- **LPI Guidelines**: Flexo typically 100-200 LPI
+- **Anilox Rule**: Anilox line screen should be 5-7x the plate LPI
+- **Cell Volume**: Higher BCM = more ink, lower BCM = finer detail
+- **Surface Screening**: AM (conventional), FM/stochastic (smoother tones), hybrid (combination)
 
-### 7. Troubleshooting Common Issues
-- Dot gain/TVI (tone value increase)
+### 7. Troubleshooting Expertise
+You can diagnose and solve:
+- Dot gain / TVI (tone value increase) issues
 - Dirty printing / scumming
-- Plate wear and durability
+- Plate wear and durability problems
 - Ink compatibility issues
 - Registration problems
-- Washout issues (undercutting, incomplete)
+- Washout issues (undercutting, incomplete washout, bridging)
+- Exposure problems (under/over exposure symptoms)
 
 ## YOUR COMMUNICATION STYLE
-- Be conversational but technical when needed
-- Ask clarifying questions to understand the user's specific situation
-- Provide specific product recommendations when appropriate
-- Explain the "why" behind recommendations
-- Use industry terminology but explain it when needed
+- Be conversational but technical - explain terms when needed
+- Always ask clarifying questions to understand the user's specific situation
+- Provide specific product recommendations with reasoning
+- Explain the "why" behind your recommendations
+- Use industry terminology but make it accessible
 - Be helpful to both beginners and experienced professionals
+- When using tools, explain what you're searching for
 
-## TOOLS AVAILABLE
-You have access to tools to query the plate database, find equivalents, and calculate exposure times. Use these to provide accurate, data-driven recommendations.
+## USING YOUR TOOLS
+You have access to the FlexoPlate IQ database. Use your tools to:
+- Search for specific plates by criteria
+- Find equivalent plates across suppliers
+- Get detailed specifications
+- Calculate exposure times
+- Look up equipment information
+
+Always use tools when the user asks about specific plates or needs data-driven recommendations.
 
 ## IMPORTANT GUIDELINES
-- Always consider the user's specific application and constraints
+- Consider the user's specific application and constraints
 - When recommending plate equivalents, explain the trade-offs
-- For exposure calculations, account for equipment age and conditions
-- If you're unsure about something, say so and suggest how to find out
-- Encourage proper testing when switching plates or processes
+- For exposure calculations, account for equipment age
+- If unsure, say so and suggest how to verify
+- Recommend proper testing when switching plates
+- Be objective about suppliers - recommend what's best for the application
 """
 
 # ============================================================================
-# PYDANTIC MODELS
+# TOOL DEFINITIONS FOR THE ASSISTANT
 # ============================================================================
 
-class ChatMessage(BaseModel):
-    role: str  # "user" or "assistant"
-    content: str
-
-class ChatRequest(BaseModel):
-    messages: List[ChatMessage]
-    context: Optional[Dict[str, Any]] = None  # Page context, selected plate, etc.
-    stream: bool = False
-
-class ChatResponse(BaseModel):
-    message: str
-    tool_calls: Optional[List[Dict[str, Any]]] = None
-    sources: Optional[List[Dict[str, Any]]] = None
-
-# ============================================================================
-# TOOL DEFINITIONS FOR OPENAI
-# ============================================================================
-
-FLEXOBRAIN_TOOLS = [
+ASSISTANT_TOOLS = [
+    {"type": "file_search"},  # Built-in RAG for uploaded documents
     {
         "type": "function",
         "function": {
             "name": "search_plates",
-            "description": "Search the plate database by various criteria. Use this to find plates matching specific requirements.",
+            "description": "Search the FlexoPlate IQ database for plates matching specific criteria. Use this when users ask about plates with certain properties.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "supplier": {
                         "type": "string",
-                        "description": "Filter by supplier name (XSYS, DuPont, Miraclon, etc.)"
+                        "description": "Filter by supplier name (XSYS, DuPont, Miraclon, Asahi, etc.)"
                     },
                     "thickness_mm": {
                         "type": "number",
@@ -155,7 +170,7 @@ FLEXOBRAIN_TOOLS = [
                     "process_type": {
                         "type": "string",
                         "enum": ["solvent", "thermal", "water_wash"],
-                        "description": "Filter by processing type"
+                        "description": "Filter by processing method"
                     },
                     "surface_type": {
                         "type": "string",
@@ -183,7 +198,7 @@ FLEXOBRAIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "find_equivalent_plates",
-            "description": "Find equivalent plates to a given plate from other suppliers. Returns ranked matches with similarity scores.",
+            "description": "Find equivalent plates to a given plate from other suppliers. Use this when users want to switch suppliers or find alternatives.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -193,7 +208,7 @@ FLEXOBRAIN_TOOLS = [
                     },
                     "target_supplier": {
                         "type": "string",
-                        "description": "Optional: Only show equivalents from this supplier"
+                        "description": "Only show equivalents from this specific supplier"
                     }
                 },
                 "required": ["plate_name"]
@@ -204,13 +219,13 @@ FLEXOBRAIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_plate_details",
-            "description": "Get detailed specifications for a specific plate",
+            "description": "Get complete specifications for a specific plate. Use this when users want detailed information about a particular plate.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "plate_name": {
                         "type": "string",
-                        "description": "The name or SKU of the plate"
+                        "description": "The name or SKU of the plate to look up"
                     }
                 },
                 "required": ["plate_name"]
@@ -221,7 +236,7 @@ FLEXOBRAIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "calculate_exposure",
-            "description": "Calculate UV exposure times for a plate based on equipment specifications",
+            "description": "Calculate UV exposure times for a plate based on equipment specifications. Use this when users need exposure recommendations.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -235,7 +250,7 @@ FLEXOBRAIN_TOOLS = [
                     },
                     "lamp_age_hours": {
                         "type": "integer",
-                        "description": "Optional: Age of UV lamps in hours for degradation calculation"
+                        "description": "Age of UV lamps in hours (for degradation calculation)"
                     }
                 },
                 "required": ["plate_name", "uv_intensity_mw_cm2"]
@@ -246,7 +261,7 @@ FLEXOBRAIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_equipment_info",
-            "description": "Get information about platemaking equipment models",
+            "description": "Get information about platemaking equipment. Use this when users ask about exposure units, processors, or other equipment.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -257,61 +272,37 @@ FLEXOBRAIN_TOOLS = [
                     },
                     "supplier": {
                         "type": "string",
-                        "description": "Filter by equipment supplier"
+                        "description": "Filter by equipment manufacturer"
                     }
                 },
                 "required": []
             }
         }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "troubleshoot_issue",
-            "description": "Get troubleshooting guidance for common flexographic printing issues",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "issue": {
-                        "type": "string",
-                        "description": "Description of the issue (e.g., 'dot gain too high', 'plate washing out too fast', 'dirty printing')"
-                    },
-                    "plate_type": {
-                        "type": "string",
-                        "description": "Optional: The plate being used"
-                    },
-                    "process_type": {
-                        "type": "string",
-                        "description": "Optional: solvent, thermal, or water_wash"
-                    }
-                },
-                "required": ["issue"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_knowledge_base",
-            "description": "Search the FlexoBrain knowledge base for technical information, best practices, and industry knowledge",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query"
-                    },
-                    "category": {
-                        "type": "string",
-                        "enum": ["plates", "processing", "equipment", "troubleshooting", "best_practices", "all"],
-                        "description": "Optional: Filter by knowledge category"
-                    }
-                },
-                "required": ["query"]
-            }
-        }
     }
 ]
+
+# ============================================================================
+# PYDANTIC MODELS
+# ============================================================================
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    messages: List[ChatMessage]
+    thread_id: Optional[str] = None  # For continuing conversations
+    context: Optional[Dict[str, Any]] = None
+
+class ChatResponse(BaseModel):
+    message: str
+    thread_id: str  # Return thread ID for continuation
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+
+class CreateAssistantResponse(BaseModel):
+    assistant_id: str
+    name: str
+    created: bool
 
 # ============================================================================
 # DATABASE CONNECTION
@@ -328,30 +319,27 @@ async def get_db_pool():
     return _db_pool
 
 # ============================================================================
-# TOOL IMPLEMENTATIONS
+# TOOL IMPLEMENTATIONS (Database Queries)
 # ============================================================================
 
-async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute a tool and return the result"""
-
+async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
+    """Execute a tool and return the result as a string"""
     pool = await get_db_pool()
 
     if tool_name == "search_plates":
-        return await tool_search_plates(pool, arguments)
+        result = await tool_search_plates(pool, arguments)
     elif tool_name == "find_equivalent_plates":
-        return await tool_find_equivalents(pool, arguments)
+        result = await tool_find_equivalents(pool, arguments)
     elif tool_name == "get_plate_details":
-        return await tool_get_plate_details(pool, arguments)
+        result = await tool_get_plate_details(pool, arguments)
     elif tool_name == "calculate_exposure":
-        return await tool_calculate_exposure(pool, arguments)
+        result = await tool_calculate_exposure(pool, arguments)
     elif tool_name == "get_equipment_info":
-        return await tool_get_equipment_info(pool, arguments)
-    elif tool_name == "troubleshoot_issue":
-        return tool_troubleshoot_issue(arguments)
-    elif tool_name == "search_knowledge_base":
-        return await tool_search_knowledge_base(pool, arguments)
+        result = await tool_get_equipment_info(pool, arguments)
     else:
-        return {"error": f"Unknown tool: {tool_name}"}
+        result = {"error": f"Unknown tool: {tool_name}"}
+
+    return json.dumps(result, indent=2)
 
 
 async def tool_search_plates(pool, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -417,7 +405,6 @@ async def tool_search_plates(pool, args: Dict[str, Any]) -> Dict[str, Any]:
             plates = []
             for row in rows:
                 plates.append({
-                    "id": str(row["id"]),
                     "name": row["display_name"],
                     "sku": row["sku_code"],
                     "supplier": row["supplier_name"],
@@ -426,7 +413,7 @@ async def tool_search_plates(pool, args: Dict[str, Any]) -> Dict[str, Any]:
                     "hardness_shore": row["hardness_shore"],
                     "surface_type": row["surface_type"],
                     "process_type": row["process_type"],
-                    "lpi_range": f"{row['min_lpi']}-{row['max_lpi']}",
+                    "lpi_range": f"{row['min_lpi']}-{row['max_lpi']} LPI",
                     "applications": row["applications"]
                 })
             return {"plates": plates, "count": len(plates)}
@@ -442,7 +429,6 @@ async def tool_find_equivalents(pool, args: Dict[str, Any]) -> Dict[str, Any]:
     plate_name = args.get("plate_name", "")
     target_supplier = args.get("target_supplier")
 
-    # First, find the source plate
     source_query = """
         SELECT
             p.id, p.display_name, p.thickness_mm, p.hardness_shore,
@@ -463,7 +449,6 @@ async def tool_find_equivalents(pool, args: Dict[str, Any]) -> Dict[str, Any]:
             if not source:
                 return {"error": f"Could not find plate: {plate_name}", "equivalents": []}
 
-            # Find equivalents
             equiv_query = """
                 SELECT
                     p.id, p.display_name, p.sku_code, p.thickness_mm, p.hardness_shore,
@@ -489,17 +474,15 @@ async def tool_find_equivalents(pool, args: Dict[str, Any]) -> Dict[str, Any]:
 
             equivalents = []
             for row in rows:
-                # Calculate similarity score
                 thickness_score = max(0, 30 - (float(row["thickness_diff"]) * 200))
                 hardness_score = max(0, 25 - (row["hardness_diff"] * 2))
                 surface_score = 20 if row["surface_type"] == source["surface_type"] else 5
                 process_score = 15 if row["process_type"] == source["process_type"] else 0
-                lpi_score = 10  # Simplified
+                lpi_score = 10
 
                 total_score = min(100, thickness_score + hardness_score + surface_score + process_score + lpi_score)
 
                 equivalents.append({
-                    "id": str(row["id"]),
                     "name": row["display_name"],
                     "supplier": row["supplier_name"],
                     "thickness_mm": float(row["thickness_mm"]),
@@ -569,12 +552,11 @@ async def tool_get_plate_details(pool, args: Dict[str, Any]) -> Dict[str, Any]:
                         "substrate_categories": row["substrate_categories"],
                         "applications": row["applications"]
                     },
-                    "exposure": {
-                        "main_exposure_min_mj": row["main_exposure_energy_min_mj_cm2"],
-                        "main_exposure_max_mj": row["main_exposure_energy_max_mj_cm2"]
+                    "exposure_energy": {
+                        "main_min_mj_cm2": row["main_exposure_energy_min_mj_cm2"],
+                        "main_max_mj_cm2": row["main_exposure_energy_max_mj_cm2"]
                     },
-                    "technology_tags": row["technology_tags"],
-                    "supplier_website": row["website_url"]
+                    "technology_tags": row["technology_tags"]
                 }
             }
     except Exception as e:
@@ -590,7 +572,6 @@ async def tool_calculate_exposure(pool, args: Dict[str, Any]) -> Dict[str, Any]:
     intensity = args.get("uv_intensity_mw_cm2", 18)
     lamp_age = args.get("lamp_age_hours", 0)
 
-    # Get plate exposure requirements
     query = """
         SELECT
             p.display_name, p.thickness_mm,
@@ -610,23 +591,17 @@ async def tool_calculate_exposure(pool, args: Dict[str, Any]) -> Dict[str, Any]:
             if not row:
                 return {"error": f"Plate not found: {plate_name}"}
 
-            # Adjust intensity for lamp age (rough degradation model)
             degradation_factor = 1.0
             if lamp_age > 0:
-                # Assume ~10% degradation per 1000 hours
                 degradation_factor = max(0.5, 1.0 - (lamp_age / 10000))
 
             effective_intensity = intensity * degradation_factor
 
-            # Calculate times
             min_energy = row["main_exposure_energy_min_mj_cm2"] or 800
             max_energy = row["main_exposure_energy_max_mj_cm2"] or 1200
             target_energy = (min_energy + max_energy) / 2
 
-            # Time = Energy / Intensity (convert mJ to mW*s)
             main_time_seconds = target_energy / effective_intensity
-
-            # Back exposure (typically 20-25% of main)
             back_energy = target_energy * 0.22
             back_time_seconds = back_energy / effective_intensity
 
@@ -637,28 +612,25 @@ async def tool_calculate_exposure(pool, args: Dict[str, Any]) -> Dict[str, Any]:
 
             return {
                 "plate": row["display_name"],
-                "calculation": {
-                    "input_intensity_mw_cm2": intensity,
+                "input": {
+                    "intensity_mw_cm2": intensity,
                     "lamp_age_hours": lamp_age,
-                    "effective_intensity_mw_cm2": round(effective_intensity, 1),
-                    "degradation_factor": round(degradation_factor, 2)
+                    "effective_intensity_mw_cm2": round(effective_intensity, 1)
                 },
-                "exposure_times": {
-                    "main_exposure": {
-                        "seconds": round(main_time_seconds),
-                        "formatted": format_time(main_time_seconds),
-                        "energy_mj_cm2": round(target_energy)
-                    },
-                    "back_exposure": {
-                        "seconds": round(back_time_seconds),
-                        "formatted": format_time(back_time_seconds),
-                        "energy_mj_cm2": round(back_energy)
-                    }
+                "calculated_times": {
+                    "main_exposure": format_time(main_time_seconds),
+                    "main_exposure_seconds": round(main_time_seconds),
+                    "back_exposure": format_time(back_time_seconds),
+                    "back_exposure_seconds": round(back_time_seconds)
                 },
-                "recommendations": [
-                    f"Target main exposure energy: {min_energy}-{max_energy} mJ/cm²",
-                    "Always run a step test when changing plates or equipment",
-                    "Measure UV intensity regularly for consistent results"
+                "energy_targets": {
+                    "main_mj_cm2": round(target_energy),
+                    "back_mj_cm2": round(back_energy)
+                },
+                "notes": [
+                    f"Based on plate spec: {min_energy}-{max_energy} mJ/cm²",
+                    "Always run a step test to verify",
+                    f"Lamp degradation factor applied: {round(degradation_factor, 2)}" if lamp_age > 0 else "No lamp age adjustment"
                 ]
             }
     except Exception as e:
@@ -674,8 +646,7 @@ async def tool_get_equipment_info(pool, args: Dict[str, Any]) -> Dict[str, Any]:
     supplier = args.get("supplier")
 
     query = """
-        SELECT
-            em.*, s.name as supplier_name
+        SELECT em.*, s.name as supplier_name
         FROM equipment_models em
         JOIN suppliers s ON em.supplier_id = s.id
         WHERE 1=1
@@ -714,9 +685,7 @@ async def tool_get_equipment_info(pool, args: Dict[str, Any]) -> Dict[str, Any]:
                     "type": row["equipment_type"],
                     "technology": row["technology"],
                     "uv_source_type": row["uv_source_type"],
-                    "nominal_intensity_mw_cm2": row["nominal_intensity_mw_cm2"],
-                    "supports_digital": row["supports_digital_plates"],
-                    "supports_analog": row["supports_analog_plates"]
+                    "nominal_intensity_mw_cm2": row["nominal_intensity_mw_cm2"]
                 })
 
             return {"equipment": equipment, "count": len(equipment)}
@@ -724,304 +693,213 @@ async def tool_get_equipment_info(pool, args: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
-def tool_troubleshoot_issue(args: Dict[str, Any]) -> Dict[str, Any]:
-    """Provide troubleshooting guidance based on built-in knowledge"""
+# ============================================================================
+# ASSISTANT MANAGEMENT
+# ============================================================================
 
-    issue = args.get("issue", "").lower()
-    plate_type = args.get("plate_type", "")
-    process_type = args.get("process_type", "")
+async def get_or_create_assistant() -> str:
+    """Get existing assistant or create a new one"""
+    global ASSISTANT_ID
 
-    # Troubleshooting knowledge base
-    troubleshooting_db = {
-        "dot gain": {
-            "causes": [
-                "Excessive impression pressure",
-                "Plate too soft for the application",
-                "Anilox volume too high",
-                "Ink viscosity too low",
-                "Over-exposure creating larger dots"
-            ],
-            "solutions": [
-                "Reduce impression pressure to kiss impression",
-                "Consider a harder plate (higher Shore A)",
-                "Use a finer anilox with lower volume",
-                "Increase ink viscosity",
-                "Reduce main exposure time and run step test"
-            ]
-        },
-        "dirty print": {
-            "causes": [
-                "Incomplete plate washout",
-                "Under-exposure leaving uncured polymer",
-                "Contaminated processing chemistry",
-                "Ink drying in cells",
-                "Damaged or worn plate surface"
-            ],
-            "solutions": [
-                "Increase washout time or brush pressure",
-                "Verify exposure times with step test",
-                "Replace processing solvent/media",
-                "Clean anilox and check ink condition",
-                "Inspect plate under magnification for damage"
-            ]
-        },
-        "plate wear": {
-            "causes": [
-                "Aggressive substrate (corrugated, rough paper)",
-                "Excessive impression pressure",
-                "Plate hardness too low for application",
-                "UV ink or harsh chemistry",
-                "Insufficient post-exposure/detack"
-            ],
-            "solutions": [
-                "Use a harder durometer plate",
-                "Optimize impression to minimum",
-                "Consider reinforced or abrasion-resistant plates",
-                "Ensure proper detack and light finishing",
-                "Rotate plates if possible"
-            ]
-        },
-        "washout": {
-            "causes": [
-                "Incorrect exposure times",
-                "Contaminated or exhausted chemistry",
-                "Wrong brush pressure or speed",
-                "Temperature issues",
-                "Film/mask problems (digital)"
-            ],
-            "solutions": [
-                "Run new exposure step test",
-                "Check chemistry condition and replace if needed",
-                "Adjust processor settings per manufacturer specs",
-                "Verify processor temperature",
-                "Check imaging quality and ablation"
-            ]
-        },
-        "registration": {
-            "causes": [
-                "Plate stretching during mounting",
-                "Inconsistent plate thickness",
-                "Sleeve or cylinder issues",
-                "Web tension problems",
-                "Thermal expansion"
-            ],
-            "solutions": [
-                "Use plate mounting equipment with registration marks",
-                "Verify plate thickness uniformity",
-                "Check sleeve/cylinder condition",
-                "Optimize web tension control",
-                "Allow plates to acclimate to press room temperature"
-            ]
-        }
-    }
+    # If we have an ID in env, verify it exists
+    if ASSISTANT_ID:
+        try:
+            assistant = await client.beta.assistants.retrieve(ASSISTANT_ID)
+            return assistant.id
+        except Exception:
+            pass  # Assistant doesn't exist, create new one
 
-    # Find matching issue
-    matched_issue = None
-    for key in troubleshooting_db:
-        if key in issue:
-            matched_issue = key
-            break
+    # Create new assistant
+    assistant = await client.beta.assistants.create(
+        name="FlexoBrain",
+        instructions=FLEXOBRAIN_INSTRUCTIONS,
+        model="gpt-4-turbo-preview",
+        tools=ASSISTANT_TOOLS
+    )
 
-    if matched_issue:
-        data = troubleshooting_db[matched_issue]
-        return {
-            "issue": matched_issue,
-            "possible_causes": data["causes"],
-            "recommended_solutions": data["solutions"],
-            "note": "These are general guidelines. Always consider your specific setup and consult plate manufacturer documentation."
-        }
-    else:
-        return {
-            "issue": issue,
-            "message": "I don't have specific troubleshooting data for this issue, but I can help analyze it based on my general flexographic knowledge.",
-            "general_approach": [
-                "1. Isolate the variable - change one thing at a time",
-                "2. Document current settings before making changes",
-                "3. Run test prints to verify each change",
-                "4. Consult plate and equipment manufacturer specs",
-                "5. Consider environmental factors (temperature, humidity)"
-            ]
-        }
+    ASSISTANT_ID = assistant.id
+    print(f"Created new FlexoBrain assistant: {ASSISTANT_ID}")
+    print(f"Add this to your environment: FLEXOBRAIN_ASSISTANT_ID={ASSISTANT_ID}")
+
+    return assistant.id
 
 
-async def tool_search_knowledge_base(pool, args: Dict[str, Any]) -> Dict[str, Any]:
-    """Search the knowledge base (placeholder for vector search)"""
+async def process_tool_calls(run, thread_id: str) -> List[Dict[str, Any]]:
+    """Process required tool calls and submit outputs"""
+    tool_outputs = []
+    tool_calls_made = []
 
-    query = args.get("query", "")
-    category = args.get("category", "all")
+    for tool_call in run.required_action.submit_tool_outputs.tool_calls:
+        tool_name = tool_call.function.name
+        arguments = json.loads(tool_call.function.arguments)
 
-    # For Phase 1, return structured knowledge
-    # Phase 2 will implement actual vector search
+        # Execute the tool
+        output = await execute_tool(tool_name, arguments)
 
-    knowledge_snippets = {
-        "flat_top": {
-            "category": "plates",
-            "content": "Flat-top dot technology creates dots with flat printing surfaces rather than rounded peaks. This provides more consistent ink transfer, better solid ink density, and improved highlight reproduction. Major flat-top solutions include XSYS nyloflex FTF, DuPont Cyrel EASY, and Miraclon FLEXCEL NX."
-        },
-        "thermal": {
-            "category": "processing",
-            "content": "Thermal plate processing (like DuPont FAST) uses heat and absorbent media instead of solvents. Benefits include faster processing (15-25 min vs 45-60 min), no solvent handling/disposal, and more consistent floor thickness. Requires compatible plates and thermal processor equipment."
-        },
-        "anilox": {
-            "category": "equipment",
-            "content": "Anilox roller selection is critical for flexo print quality. Key factors: line screen (cells per inch) should be 4-6x the plate LPI, cell volume (BCM) determines ink laydown, ceramic anilox offers durability. Higher line screens = finer detail but less ink."
-        },
-        "exposure": {
-            "category": "processing",
-            "content": "UV exposure polymerizes the photopolymer plate. Main exposure (front) creates the image - energy typically 800-1800 mJ/cm². Back exposure creates the floor thickness. Always run a step test (like UGRA/FOGRA) when changing plates or after lamp changes. LED UV provides more consistent intensity over time."
-        }
-    }
+        tool_outputs.append({
+            "tool_call_id": tool_call.id,
+            "output": output
+        })
 
-    results = []
-    query_lower = query.lower()
+        tool_calls_made.append({
+            "tool": tool_name,
+            "args": arguments,
+            "result": json.loads(output)
+        })
 
-    for key, snippet in knowledge_snippets.items():
-        if key in query_lower or query_lower in snippet["content"].lower():
-            if category == "all" or category == snippet["category"]:
-                results.append(snippet)
+    # Submit tool outputs
+    await client.beta.threads.runs.submit_tool_outputs(
+        thread_id=thread_id,
+        run_id=run.id,
+        tool_outputs=tool_outputs
+    )
 
-    return {
-        "query": query,
-        "results": results,
-        "note": "Knowledge base search will be expanded with web-scraped content in Phase 2"
-    }
+    return tool_calls_made
 
 
 # ============================================================================
-# MAIN CHAT ENDPOINT
+# API ENDPOINTS
 # ============================================================================
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Main chat endpoint for FlexoBrain agent"""
+    """
+    Main chat endpoint using OpenAI Assistants API
 
+    - Creates or continues a conversation thread
+    - Runs the FlexoBrain assistant
+    - Handles tool calls (database queries)
+    - Returns response with thread_id for continuation
+    """
     if not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
-    # Build messages for OpenAI
-    messages = [{"role": "system", "content": FLEXOBRAIN_SYSTEM_PROMPT}]
-
-    # Add context if provided
-    if request.context:
-        context_msg = f"\n\nCurrent context: {json.dumps(request.context)}"
-        messages[0]["content"] += context_msg
-
-    # Add conversation history
-    for msg in request.messages:
-        messages.append({"role": msg.role, "content": msg.content})
-
     try:
-        # Call OpenAI with tools
-        response = await client.chat.completions.create(
-            model="gpt-4-turbo-preview",
-            messages=messages,
-            tools=FLEXOBRAIN_TOOLS,
-            tool_choice="auto",
-            temperature=0.7,
-            max_tokens=2000
+        # Get or create assistant
+        assistant_id = await get_or_create_assistant()
+
+        # Get or create thread
+        if request.thread_id:
+            thread_id = request.thread_id
+        else:
+            thread = await client.beta.threads.create()
+            thread_id = thread.id
+
+        # Get the latest user message
+        user_message = request.messages[-1].content if request.messages else ""
+
+        # Add context to the message if provided
+        if request.context:
+            context_str = f"\n\n[Context: User is on the {request.context.get('page', 'unknown')} page"
+            if request.context.get('selectedPlate'):
+                plate = request.context['selectedPlate']
+                context_str += f", viewing plate: {plate.get('name')} from {plate.get('supplier')}"
+            context_str += "]"
+            user_message += context_str
+
+        # Add user message to thread
+        await client.beta.threads.messages.create(
+            thread_id=thread_id,
+            role="user",
+            content=user_message
         )
 
-        assistant_message = response.choices[0].message
+        # Run the assistant
+        run = await client.beta.threads.runs.create(
+            thread_id=thread_id,
+            assistant_id=assistant_id
+        )
 
-        # Handle tool calls
-        tool_results = []
-        if assistant_message.tool_calls:
-            for tool_call in assistant_message.tool_calls:
-                tool_name = tool_call.function.name
-                tool_args = json.loads(tool_call.function.arguments)
+        # Poll for completion (with tool handling)
+        all_tool_calls = []
+        max_iterations = 30  # Prevent infinite loops
+        iteration = 0
 
-                # Execute the tool
-                result = await execute_tool(tool_name, tool_args)
-                tool_results.append({
-                    "tool": tool_name,
-                    "args": tool_args,
-                    "result": result
-                })
-
-            # Add tool results to messages and get final response
-            messages.append({
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
-                    }
-                    for tc in assistant_message.tool_calls
-                ]
-            })
-
-            for i, tool_call in enumerate(assistant_message.tool_calls):
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(tool_results[i]["result"])
-                })
-
-            # Get final response with tool results
-            final_response = await client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=messages,
-                temperature=0.7,
-                max_tokens=2000
+        while iteration < max_iterations:
+            iteration += 1
+            run = await client.beta.threads.runs.retrieve(
+                thread_id=thread_id,
+                run_id=run.id
             )
 
-            return ChatResponse(
-                message=final_response.choices[0].message.content,
-                tool_calls=tool_results
-            )
+            if run.status == "completed":
+                break
+            elif run.status == "requires_action":
+                # Handle tool calls
+                tool_calls = await process_tool_calls(run, thread_id)
+                all_tool_calls.extend(tool_calls)
+            elif run.status in ["failed", "cancelled", "expired"]:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Assistant run {run.status}: {run.last_error}"
+                )
+            else:
+                # Still running, wait a bit
+                await asyncio.sleep(0.5)
+
+        # Get the assistant's response
+        messages = await client.beta.threads.messages.list(
+            thread_id=thread_id,
+            order="desc",
+            limit=1
+        )
+
+        assistant_message = ""
+        if messages.data:
+            for content in messages.data[0].content:
+                if content.type == "text":
+                    assistant_message = content.text.value
+                    break
 
         return ChatResponse(
-            message=assistant_message.content,
-            tool_calls=None
+            message=assistant_message,
+            thread_id=thread_id,
+            tool_calls=all_tool_calls if all_tool_calls else None
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
 
 
-@router.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
-    """Streaming chat endpoint for real-time responses"""
-
+@router.post("/assistant/create", response_model=CreateAssistantResponse)
+async def create_assistant():
+    """
+    Manually create/recreate the FlexoBrain assistant
+    Returns the assistant ID to save in environment variables
+    """
     if not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
-    async def generate():
-        messages = [{"role": "system", "content": FLEXOBRAIN_SYSTEM_PROMPT}]
+    try:
+        assistant = await client.beta.assistants.create(
+            name="FlexoBrain",
+            instructions=FLEXOBRAIN_INSTRUCTIONS,
+            model="gpt-4-turbo-preview",
+            tools=ASSISTANT_TOOLS
+        )
 
-        if request.context:
-            context_msg = f"\n\nCurrent context: {json.dumps(request.context)}"
-            messages[0]["content"] += context_msg
+        return CreateAssistantResponse(
+            assistant_id=assistant.id,
+            name=assistant.name,
+            created=True
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create assistant: {str(e)}")
 
-        for msg in request.messages:
-            messages.append({"role": msg.role, "content": msg.content})
 
-        try:
-            stream = await client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=messages,
-                tools=FLEXOBRAIN_TOOLS,
-                tool_choice="auto",
-                temperature=0.7,
-                max_tokens=2000,
-                stream=True
-            )
+@router.delete("/thread/{thread_id}")
+async def delete_thread(thread_id: str):
+    """Delete a conversation thread"""
+    if not os.getenv("OPENAI_API_KEY"):
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
-            async for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    yield f"data: {json.dumps({'content': chunk.choices[0].delta.content})}\n\n"
-
-            yield "data: [DONE]\n\n"
-
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    try:
+        await client.beta.threads.delete(thread_id)
+        return {"deleted": True, "thread_id": thread_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete thread: {str(e)}")
 
 
 @router.get("/health")
@@ -1035,5 +913,6 @@ async def health_check():
         "status": "healthy" if openai_configured else "degraded",
         "openai_configured": openai_configured,
         "database_connected": db_connected,
-        "agent": "FlexoBrain v1.0"
+        "assistant_id": ASSISTANT_ID or "Will be created on first request",
+        "agent": "FlexoBrain v2.0 (Assistants API)"
     }
