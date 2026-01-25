@@ -23,6 +23,7 @@ except ImportError:
     from python_jose import JWTError, jwt
 from intelligence_routes import intelligence_router
 import intelligence_routes
+from flexobrain_agent import router as flexobrain_router
 # ============================================================
 # APP SETUP
 # ============================================================
@@ -36,6 +37,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(intelligence_router)
+app.include_router(flexobrain_router)
 # ============================================================
 # CONFIGURATION
 # ============================================================
