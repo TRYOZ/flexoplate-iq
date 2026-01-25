@@ -24,8 +24,18 @@ import asyncpg
 
 router = APIRouter(prefix="/api/agent", tags=["FlexoBrain Agent"])
 
-# Initialize OpenAI client
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Lazy-loaded OpenAI client (initialized on first use, not at module load)
+_openai_client = None
+
+def get_openai_client() -> AsyncOpenAI:
+    """Get or create the OpenAI client (lazy initialization)"""
+    global _openai_client
+    if _openai_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable not set")
+        _openai_client = AsyncOpenAI(api_key=api_key)
+    return _openai_client
 
 # Assistant ID - will be created on first run and stored
 ASSISTANT_ID = os.getenv("FLEXOBRAIN_ASSISTANT_ID")
@@ -702,6 +712,7 @@ async def get_or_create_assistant() -> str:
     global ASSISTANT_ID
 
     # If we have an ID in env, verify it exists
+    client = get_openai_client()
     if ASSISTANT_ID:
         try:
             assistant = await client.beta.assistants.retrieve(ASSISTANT_ID)
@@ -748,6 +759,7 @@ async def process_tool_calls(run, thread_id: str) -> List[Dict[str, Any]]:
         })
 
     # Submit tool outputs
+    client = get_openai_client()
     await client.beta.threads.runs.submit_tool_outputs(
         thread_id=thread_id,
         run_id=run.id,
@@ -775,6 +787,9 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
     try:
+        # Get OpenAI client
+        client = get_openai_client()
+
         # Get or create assistant
         assistant_id = await get_or_create_assistant()
 
@@ -873,6 +888,7 @@ async def create_assistant():
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
     try:
+        client = get_openai_client()
         assistant = await client.beta.assistants.create(
             name="FlexoBrain",
             instructions=FLEXOBRAIN_INSTRUCTIONS,
@@ -896,6 +912,7 @@ async def delete_thread(thread_id: str):
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
     try:
+        client = get_openai_client()
         await client.beta.threads.delete(thread_id)
         return {"deleted": True, "thread_id": thread_id}
     except Exception as e:
