@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import FlexoBrainChat from '@/components/FlexoBrainChat';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
 
@@ -612,6 +613,13 @@ export default function ExposurePage() {
           )}
         </div>
       </div>
+
+      {/* FlexoBrain AI Assistant */}
+      <FlexoBrainChat
+        context={{
+          page: 'exposure',
+        }}
+      />
     </div>
   );
 }

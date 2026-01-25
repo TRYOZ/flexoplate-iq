@@ -3,8 +3,10 @@
 // frontend/src/app/equivalency/page.tsx
 // ======================================
 // Plate Equivalency Finder - FIXED field names
+// Now with FlexoBrain AI assistant
 
 import { useState, useEffect } from 'react';
+import FlexoBrainChat from '@/components/FlexoBrainChat';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
 
@@ -240,6 +242,18 @@ export default function EquivalencyPage() {
           )}
         </div>
       </div>
+
+      {/* FlexoBrain AI Assistant */}
+      <FlexoBrainChat
+        context={{
+          page: 'equivalency',
+          selectedPlate: selectedPlate ? {
+            id: selectedPlate.id,
+            name: selectedPlate.display_name,
+            supplier: selectedPlate.supplier_name,
+          } : undefined,
+        }}
+      />
     </div>
   );
 }

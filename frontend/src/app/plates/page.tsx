@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Filter, RefreshCw, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
 import { api, Plate, Supplier } from '@/lib/api';
+import FlexoBrainChat from '@/components/FlexoBrainChat';
 
 export default function PlatesPage() {
   const [plates, setPlates] = useState<Plate[]>([]);
@@ -205,6 +206,18 @@ export default function PlatesPage() {
         </div>
       </div>
       {error && (<div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700">{error}</div>)}
+
+      {/* FlexoBrain AI Assistant */}
+      <FlexoBrainChat
+        context={{
+          page: 'plates',
+          filters: {
+            supplier: selectedSupplier || undefined,
+            process: selectedProcess || undefined,
+            thickness: selectedThickness || undefined,
+          },
+        }}
+      />
     </div>
   );
 }
