@@ -26,6 +26,7 @@ import intelligence_routes
 from flexobrain_agent import router as flexobrain_router
 from knowledge_scraper import router as knowledge_router
 from knowledge_loader import router as knowledge_loader_router
+from plate_data_importer import router as plate_importer_router
 # ============================================================
 # APP SETUP
 # ============================================================
@@ -42,6 +43,7 @@ app.include_router(intelligence_router)
 app.include_router(flexobrain_router)
 app.include_router(knowledge_router)
 app.include_router(knowledge_loader_router)
+app.include_router(plate_importer_router)
 # ============================================================
 # CONFIGURATION
 # ============================================================
