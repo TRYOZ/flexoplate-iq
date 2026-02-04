@@ -2,11 +2,11 @@
 # ==================================
 # Aggregates news from flexographic and printing industry sources
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timedelta
-import aiohttp
+import httpx
 import xml.etree.ElementTree as ET
 import re
 import hashlib
@@ -170,81 +170,81 @@ def parse_rss_date(date_str: str) -> Optional[datetime]:
     return None
 
 
-async def fetch_feed(session: aiohttp.ClientSession, feed: dict) -> List[dict]:
+async def fetch_feed(client: httpx.AsyncClient, feed: dict) -> List[dict]:
     """Fetch and parse a single RSS feed"""
     items = []
 
     try:
-        async with session.get(feed["url"], timeout=aiohttp.ClientTimeout(total=10)) as response:
-            if response.status != 200:
-                return items
+        response = await client.get(feed["url"], timeout=10.0)
+        if response.status_code != 200:
+            return items
 
-            content = await response.text()
-            root = ET.fromstring(content)
+        content = response.text
+        root = ET.fromstring(content)
 
-            # Handle both RSS 2.0 and Atom formats
-            namespaces = {
-                'atom': 'http://www.w3.org/2005/Atom',
-                'media': 'http://search.yahoo.com/mrss/',
-                'content': 'http://purl.org/rss/1.0/modules/content/'
-            }
+        # Handle both RSS 2.0 and Atom formats
+        namespaces = {
+            'atom': 'http://www.w3.org/2005/Atom',
+            'media': 'http://search.yahoo.com/mrss/',
+            'content': 'http://purl.org/rss/1.0/modules/content/'
+        }
 
-            # Try RSS 2.0 format first
-            channel = root.find('channel')
-            if channel is not None:
-                for item in channel.findall('item'):
-                    title = item.findtext('title', '')
-                    description = item.findtext('description', '')
-                    link = item.findtext('link', '')
-                    pub_date = item.findtext('pubDate', '')
+        # Try RSS 2.0 format first
+        channel = root.find('channel')
+        if channel is not None:
+            for item in channel.findall('item'):
+                title = item.findtext('title', '')
+                description = item.findtext('description', '')
+                link = item.findtext('link', '')
+                pub_date = item.findtext('pubDate', '')
 
-                    # Try to get image
-                    image_url = None
-                    media_content = item.find('media:content', namespaces)
-                    if media_content is not None:
-                        image_url = media_content.get('url')
+                # Try to get image
+                image_url = None
+                media_content = item.find('media:content', namespaces)
+                if media_content is not None:
+                    image_url = media_content.get('url')
 
-                    # Also check enclosure
-                    enclosure = item.find('enclosure')
-                    if enclosure is not None and not image_url:
-                        enc_type = enclosure.get('type', '')
-                        if 'image' in enc_type:
-                            image_url = enclosure.get('url')
+                # Also check enclosure
+                enclosure = item.find('enclosure')
+                if enclosure is not None and not image_url:
+                    enc_type = enclosure.get('type', '')
+                    if 'image' in enc_type:
+                        image_url = enclosure.get('url')
 
-                    if title and link:
-                        items.append({
-                            "title": clean_html(title),
-                            "description": clean_html(description),
-                            "url": link,
-                            "source": feed["name"],
-                            "source_url": feed["url"].split('/feed')[0].split('/rss')[0],
-                            "category": feed["category"],
-                            "published_date": pub_date,
-                            "image_url": image_url
-                        })
+                if title and link:
+                    items.append({
+                        "title": clean_html(title),
+                        "description": clean_html(description),
+                        "url": link,
+                        "source": feed["name"],
+                        "source_url": feed["url"].split('/feed')[0].split('/rss')[0],
+                        "category": feed["category"],
+                        "published_date": pub_date,
+                        "image_url": image_url
+                    })
 
-            # Try Atom format
-            else:
-                for entry in root.findall('atom:entry', namespaces) or root.findall('entry'):
-                    title = entry.findtext('atom:title', '', namespaces) or entry.findtext('title', '')
-                    summary = entry.findtext('atom:summary', '', namespaces) or entry.findtext('summary', '')
+        # Try Atom format
+        else:
+            for entry in root.findall('atom:entry', namespaces) or root.findall('entry'):
+                title = entry.findtext('atom:title', '', namespaces) or entry.findtext('title', '')
+                summary = entry.findtext('atom:summary', '', namespaces) or entry.findtext('summary', '')
 
-                    link_elem = entry.find('atom:link', namespaces) or entry.find('link')
-                    link = link_elem.get('href', '') if link_elem is not None else ''
+                link_elem = entry.find('atom:link', namespaces) or entry.find('link')
+                link = link_elem.get('href', '') if link_elem is not None else ''
 
-                    updated = entry.findtext('atom:updated', '', namespaces) or entry.findtext('updated', '')
+                updated = entry.findtext('atom:updated', '', namespaces) or entry.findtext('updated', '')
 
-                    if title and link:
-                        items.append({
-                            "title": clean_html(title),
-                            "description": clean_html(summary),
-                            "url": link,
-                            "source": feed["name"],
-                            "source_url": feed["url"].split('/feed')[0],
-                            "category": feed["category"],
-                            "published_date": updated,
-                            "image_url": None
-                        })
+                if title and link:
+                    items.append({
+                        "title": clean_html(title),
+                        "description": clean_html(summary),
+                        "url": link,
+                        "source": feed["name"],
+                        "source_url": feed["url"].split('/feed')[0],
+                        "category": feed["category"],
+                        "published_date": updated,
+                        "image_url": None
+                    })
 
     except Exception as e:
         print(f"Error fetching {feed['name']}: {e}")
@@ -256,8 +256,8 @@ async def fetch_all_feeds() -> List[NewsItem]:
     """Fetch news from all configured RSS feeds"""
     all_items = []
 
-    async with aiohttp.ClientSession() as session:
-        tasks = [fetch_feed(session, feed) for feed in RSS_FEEDS]
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        tasks = [fetch_feed(client, feed) for feed in RSS_FEEDS]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for result in results:
