@@ -449,6 +449,20 @@ def content_hash(content: str) -> str:
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
+async def check_has_vector_column(conn) -> bool:
+    """Check if the embedding column exists in knowledge_chunks table"""
+    try:
+        result = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'knowledge_chunks' AND column_name = 'embedding'
+            )
+        """)
+        return result
+    except:
+        return False
+
+
 async def store_document(
     pool: asyncpg.Pool,
     title: str,
@@ -462,7 +476,7 @@ async def store_document(
     supplier_id: str = None
 ) -> Tuple[str, bool]:
     """
-    Store a document and its chunks with embeddings
+    Store a document and its chunks with embeddings (if pgvector available)
 
     Returns:
         Tuple of (document_id, is_new)
@@ -500,34 +514,109 @@ async def store_document(
         chunks = chunk_text(content)
 
         if chunks:
-            # Generate embeddings for all chunks
-            chunk_texts = [c['text'] for c in chunks]
-            embeddings = await generate_embeddings_batch(chunk_texts)
+            # Check if we have vector support
+            has_vector = await check_has_vector_column(conn)
 
-            # Store chunks with embeddings
-            for chunk, embedding in zip(chunks, embeddings):
-                await conn.execute("""
-                    INSERT INTO knowledge_chunks
-                    (document_id, chunk_index, chunk_text, chunk_tokens, embedding)
-                    VALUES ($1, $2, $3, $4, $5)
-                """, doc_id, chunk['index'], chunk['text'], chunk['tokens'],
-                    json.dumps(embedding))  # pgvector accepts JSON array
+            if has_vector:
+                # Generate embeddings for all chunks
+                try:
+                    chunk_texts = [c['text'] for c in chunks]
+                    embeddings = await generate_embeddings_batch(chunk_texts)
+
+                    # Store chunks with embeddings
+                    for chunk, embedding in zip(chunks, embeddings):
+                        await conn.execute("""
+                            INSERT INTO knowledge_chunks
+                            (document_id, chunk_index, chunk_text, chunk_tokens, embedding)
+                            VALUES ($1, $2, $3, $4, $5)
+                        """, doc_id, chunk['index'], chunk['text'], chunk['tokens'],
+                            json.dumps(embedding))
+                except Exception as e:
+                    print(f"Error storing embeddings, falling back to text-only: {e}")
+                    # Fallback: store without embeddings
+                    for chunk in chunks:
+                        await conn.execute("""
+                            INSERT INTO knowledge_chunks
+                            (document_id, chunk_index, chunk_text, chunk_tokens)
+                            VALUES ($1, $2, $3, $4)
+                        """, doc_id, chunk['index'], chunk['text'], chunk['tokens'])
+            else:
+                # No vector support - store chunks without embeddings
+                for chunk in chunks:
+                    await conn.execute("""
+                        INSERT INTO knowledge_chunks
+                        (document_id, chunk_index, chunk_text, chunk_tokens)
+                        VALUES ($1, $2, $3, $4)
+                    """, doc_id, chunk['index'], chunk['text'], chunk['tokens'])
 
         return str(doc_id), True
 
 
 async def search_knowledge_db(
     pool: asyncpg.Pool,
-    query_embedding: List[float],
+    query_embedding: List[float] = None,
+    query_text: str = None,
     category: str = None,
     limit: int = 10,
     threshold: float = 0.7
 ) -> List[Dict[str, Any]]:
     """
-    Search knowledge base using vector similarity
+    Search knowledge base using vector similarity or full-text search fallback
     """
     async with pool.acquire() as conn:
-        # Build query
+        # Check if we have vector support
+        has_vector = await check_has_vector_column(conn)
+
+        if has_vector and query_embedding:
+            # Use vector similarity search
+            try:
+                if category:
+                    results = await conn.fetch("""
+                        SELECT
+                            kc.id as chunk_id,
+                            kd.id as document_id,
+                            kc.chunk_text,
+                            kd.title,
+                            kd.category,
+                            kd.source_url,
+                            1 - (kc.embedding <=> $1::vector) as similarity
+                        FROM knowledge_chunks kc
+                        JOIN knowledge_documents kd ON kc.document_id = kd.id
+                        WHERE kd.is_active = TRUE
+                          AND kd.category = $2
+                          AND 1 - (kc.embedding <=> $1::vector) > $3
+                        ORDER BY kc.embedding <=> $1::vector
+                        LIMIT $4
+                    """, json.dumps(query_embedding), category, threshold, limit)
+                else:
+                    results = await conn.fetch("""
+                        SELECT
+                            kc.id as chunk_id,
+                            kd.id as document_id,
+                            kc.chunk_text,
+                            kd.title,
+                            kd.category,
+                            kd.source_url,
+                            1 - (kc.embedding <=> $1::vector) as similarity
+                        FROM knowledge_chunks kc
+                        JOIN knowledge_documents kd ON kc.document_id = kd.id
+                        WHERE kd.is_active = TRUE
+                          AND 1 - (kc.embedding <=> $1::vector) > $2
+                        ORDER BY kc.embedding <=> $1::vector
+                        LIMIT $3
+                    """, json.dumps(query_embedding), threshold, limit)
+                return [dict(r) for r in results]
+            except Exception as e:
+                print(f"Vector search failed, falling back to text search: {e}")
+                # Fall through to text search
+
+        # Fallback: Full-text search
+        if not query_text:
+            return []
+
+        # Convert query to tsquery format
+        search_terms = ' & '.join(query_text.split())
+
         if category:
             results = await conn.fetch("""
                 SELECT
@@ -537,15 +626,15 @@ async def search_knowledge_db(
                     kd.title,
                     kd.category,
                     kd.source_url,
-                    1 - (kc.embedding <=> $1::vector) as similarity
+                    ts_rank(to_tsvector('english', kc.chunk_text), plainto_tsquery('english', $1)) as similarity
                 FROM knowledge_chunks kc
                 JOIN knowledge_documents kd ON kc.document_id = kd.id
                 WHERE kd.is_active = TRUE
                   AND kd.category = $2
-                  AND 1 - (kc.embedding <=> $1::vector) > $3
-                ORDER BY kc.embedding <=> $1::vector
-                LIMIT $4
-            """, json.dumps(query_embedding), category, threshold, limit)
+                  AND to_tsvector('english', kc.chunk_text) @@ plainto_tsquery('english', $1)
+                ORDER BY similarity DESC
+                LIMIT $3
+            """, query_text, category, limit)
         else:
             results = await conn.fetch("""
                 SELECT
@@ -555,14 +644,14 @@ async def search_knowledge_db(
                     kd.title,
                     kd.category,
                     kd.source_url,
-                    1 - (kc.embedding <=> $1::vector) as similarity
+                    ts_rank(to_tsvector('english', kc.chunk_text), plainto_tsquery('english', $1)) as similarity
                 FROM knowledge_chunks kc
                 JOIN knowledge_documents kd ON kc.document_id = kd.id
                 WHERE kd.is_active = TRUE
-                  AND 1 - (kc.embedding <=> $1::vector) > $2
-                ORDER BY kc.embedding <=> $1::vector
-                LIMIT $3
-            """, json.dumps(query_embedding), threshold, limit)
+                  AND to_tsvector('english', kc.chunk_text) @@ plainto_tsquery('english', $1)
+                ORDER BY similarity DESC
+                LIMIT $2
+            """, query_text, limit)
 
         return [dict(r) for r in results]
 
@@ -731,22 +820,26 @@ async def add_manual_knowledge(request: AddKnowledgeRequest):
 @router.post("/search")
 async def search_knowledge(request: SearchKnowledgeRequest):
     """
-    Search the knowledge base using semantic similarity
+    Search the knowledge base using semantic similarity or full-text search
     """
     pool = await get_db_pool()
     if not pool:
         raise HTTPException(status_code=500, detail="Database not available")
 
-    if not os.getenv("OPENAI_API_KEY"):
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    query_embedding = None
 
-    # Generate embedding for query
-    query_embedding = await generate_embedding(request.query)
+    # Try to generate embedding if OpenAI is configured
+    if os.getenv("OPENAI_API_KEY"):
+        try:
+            query_embedding = await generate_embedding(request.query)
+        except Exception as e:
+            print(f"Embedding generation failed, using text search: {e}")
 
-    # Search
+    # Search (will use vector if available, otherwise text search)
     results = await search_knowledge_db(
         pool=pool,
         query_embedding=query_embedding,
+        query_text=request.query,
         category=request.category,
         limit=request.limit,
         threshold=request.threshold

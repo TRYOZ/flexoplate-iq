@@ -55,10 +55,18 @@ pool: asyncpg.Pool = None
 
 async def init_knowledge_base_tables(conn):
     """Create knowledge base tables if they don't exist"""
-    await conn.execute("""
-        -- Enable pgvector extension
-        CREATE EXTENSION IF NOT EXISTS vector;
 
+    # Try to enable pgvector, but don't fail if not available
+    has_vector = False
+    try:
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+        has_vector = True
+        print("pgvector extension enabled")
+    except Exception as e:
+        print(f"pgvector not available (will use text search): {e}")
+
+    # Create tables without vector column first
+    await conn.execute("""
         -- Knowledge Documents Table
         CREATE TABLE IF NOT EXISTS knowledge_documents (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -89,14 +97,13 @@ async def init_knowledge_base_tables(conn):
         WHEN duplicate_object THEN NULL;
         END $$;
 
-        -- Knowledge Chunks Table (with vector embeddings)
+        -- Knowledge Chunks Table (without vector for now)
         CREATE TABLE IF NOT EXISTS knowledge_chunks (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             document_id UUID NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
             chunk_index INTEGER NOT NULL,
             chunk_text TEXT NOT NULL,
             chunk_tokens INTEGER,
-            embedding vector(1536),
             created_at TIMESTAMPTZ DEFAULT NOW()
         );
 
@@ -129,23 +136,31 @@ async def init_knowledge_base_tables(conn):
         );
     """)
 
-    # Create indexes separately (IF NOT EXISTS works for indexes)
+    # Add embedding column only if pgvector is available
+    if has_vector:
+        try:
+            await conn.execute("""
+                DO $$ BEGIN
+                    ALTER TABLE knowledge_chunks ADD COLUMN embedding vector(1536);
+                EXCEPTION WHEN duplicate_column THEN NULL;
+                END $$;
+            """)
+            print("Vector embedding column added")
+        except Exception as e:
+            print(f"Could not add embedding column: {e}")
+
+    # Create indexes
     await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_docs_category ON knowledge_documents(category);
         CREATE INDEX IF NOT EXISTS idx_docs_source_type ON knowledge_documents(source_type);
         CREATE INDEX IF NOT EXISTS idx_docs_active ON knowledge_documents(is_active);
         CREATE INDEX IF NOT EXISTS idx_docs_content_hash ON knowledge_documents(content_hash);
         CREATE INDEX IF NOT EXISTS idx_chunks_document ON knowledge_chunks(document_id);
-    """)
 
-    # Try to create vector index (may fail if not enough data, that's ok)
-    try:
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON knowledge_chunks
-            USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-        """)
-    except Exception:
-        pass  # Vector index needs data to build, will be created later
+        -- Full text search index for fallback
+        CREATE INDEX IF NOT EXISTS idx_docs_content_search ON knowledge_documents USING gin(to_tsvector('english', content));
+        CREATE INDEX IF NOT EXISTS idx_chunks_text_search ON knowledge_chunks USING gin(to_tsvector('english', chunk_text));
+    """)
 
     # Seed default scrape sources
     await conn.execute("""
