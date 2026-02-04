@@ -152,7 +152,7 @@ export default function BumpUpCalculatorPage() {
                       <p className="font-medium text-gray-900">{preset.name}</p>
                       {key !== 'custom' && (
                         <p className="text-xs text-gray-500">
-                          50% TVI: {preset.values[50]}%
+                          50% TVI: {(preset.values as Record<number, number>)[50]}%
                         </p>
                       )}
                     </div>
