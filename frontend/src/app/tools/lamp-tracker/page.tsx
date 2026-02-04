@@ -400,101 +400,151 @@ export default function LampTrackerPage() {
 
                 {/* Degradation Curve */}
                 <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-                  <h2 className="text-lg font-semibold text-gray-900 mb-4">Degradation Curve</h2>
+                  <h2 className="text-lg font-semibold text-gray-900 mb-6">Degradation Curve</h2>
 
-                  <div className="h-64 relative bg-gray-50 rounded-lg overflow-hidden">
-                    {/* Chart container with padding */}
-                    <div className="absolute inset-0 pl-8 pr-4 pt-4 pb-6">
-                      {/* Grid */}
-                      <div className="absolute inset-0 grid grid-cols-10 grid-rows-5">
-                        {[...Array(50)].map((_, i) => (
-                          <div key={i} className="border-l border-t border-gray-200" />
-                        ))}
-                      </div>
-
-                      <svg
-                        className="absolute inset-0 overflow-hidden"
-                        viewBox="0 0 100 100"
-                        preserveAspectRatio="none"
-                        style={{ overflow: 'hidden' }}
-                      >
-                        <defs>
-                          <clipPath id="chartClip">
-                            <rect x="0" y="0" width="100" height="100" />
-                          </clipPath>
-                        </defs>
-
-                        <g clipPath="url(#chartClip)">
-                          {/* Target intensity line */}
-                          <line
-                            x1="0"
-                            y1={100 - (currentLamp.targetIntensity / currentLamp.initialIntensity) * 100}
-                            x2="100"
-                            y2={100 - (currentLamp.targetIntensity / currentLamp.initialIntensity) * 100}
-                            stroke="#ef4444"
-                            strokeWidth="0.5"
-                            strokeDasharray="2,2"
-                          />
-
-                          {/* Predicted curve - clamp values to chart bounds */}
-                          <polyline
-                            fill="none"
-                            stroke="#eab308"
-                            strokeWidth="1.5"
-                            points={lampAnalysis.predictions
-                              .map(p => {
-                                const x = (p.hours / currentLamp.maxHours) * 100;
-                                const y = Math.max(0, Math.min(100, 100 - (p.intensity / currentLamp.initialIntensity) * 100));
-                                return `${x},${y}`;
-                              })
-                              .join(' ')}
-                          />
-
-                          {/* Actual readings */}
-                          {currentLamp.readings.map((reading, i) => {
-                            const x = (reading.hours / currentLamp.maxHours) * 100;
-                            const y = Math.max(0, Math.min(100, 100 - (reading.intensity / currentLamp.initialIntensity) * 100));
-                            return (
-                              <circle
-                                key={i}
-                                cx={x}
-                                cy={y}
-                                r="2"
-                                fill="#3b82f6"
-                              />
-                            );
-                          })}
-                        </g>
-                      </svg>
+                  {/* Chart Container */}
+                  <div className="flex">
+                    {/* Y-Axis Label */}
+                    <div className="flex items-center mr-2">
+                      <span className="text-xs text-gray-500 -rotate-90 whitespace-nowrap">
+                        Intensity (mW/cm²)
+                      </span>
                     </div>
 
-                    {/* Y Axis labels */}
-                    <div className="absolute left-1 top-4 bottom-6 flex flex-col justify-between text-xs text-gray-500 w-6 text-right">
+                    {/* Y-Axis Values */}
+                    <div className="flex flex-col justify-between text-xs text-gray-500 pr-2 py-2" style={{ height: '220px' }}>
                       <span>{currentLamp.initialIntensity}</span>
-                      <span>{Math.round(currentLamp.initialIntensity / 2)}</span>
+                      <span>{Math.round(currentLamp.initialIntensity * 0.75)}</span>
+                      <span>{Math.round(currentLamp.initialIntensity * 0.5)}</span>
+                      <span>{Math.round(currentLamp.initialIntensity * 0.25)}</span>
                       <span>0</span>
                     </div>
 
-                    {/* X Axis labels */}
-                    <div className="absolute bottom-1 left-8 right-4 flex justify-between text-xs text-gray-500">
-                      <span>0h</span>
-                      <span>{Math.round(currentLamp.maxHours / 2)}h</span>
-                      <span>{currentLamp.maxHours}h</span>
+                    {/* Chart Area */}
+                    <div className="flex-1">
+                      <div
+                        className="relative bg-gradient-to-b from-gray-50 to-white rounded-lg border border-gray-200"
+                        style={{ height: '220px' }}
+                      >
+                        {/* Horizontal Grid Lines */}
+                        {[0, 25, 50, 75, 100].map((percent) => (
+                          <div
+                            key={percent}
+                            className="absolute left-0 right-0 border-t border-gray-100"
+                            style={{ top: `${percent}%` }}
+                          />
+                        ))}
+
+                        {/* Vertical Grid Lines */}
+                        {[0, 25, 50, 75, 100].map((percent) => (
+                          <div
+                            key={percent}
+                            className="absolute top-0 bottom-0 border-l border-gray-100"
+                            style={{ left: `${percent}%` }}
+                          />
+                        ))}
+
+                        {/* SVG Chart */}
+                        <svg
+                          className="absolute inset-0 w-full h-full"
+                          viewBox="0 0 100 100"
+                          preserveAspectRatio="none"
+                        >
+                          <defs>
+                            <clipPath id="chartClipPath">
+                              <rect x="0" y="0" width="100" height="100" />
+                            </clipPath>
+                            <linearGradient id="curveGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                              <stop offset="0%" stopColor="#eab308" />
+                              <stop offset="100%" stopColor="#f59e0b" />
+                            </linearGradient>
+                          </defs>
+
+                          <g clipPath="url(#chartClipPath)">
+                            {/* Target intensity line */}
+                            <line
+                              x1="0"
+                              y1={100 - (currentLamp.targetIntensity / currentLamp.initialIntensity) * 100}
+                              x2="100"
+                              y2={100 - (currentLamp.targetIntensity / currentLamp.initialIntensity) * 100}
+                              stroke="#ef4444"
+                              strokeWidth="0.8"
+                              strokeDasharray="3,3"
+                              opacity="0.7"
+                            />
+
+                            {/* Predicted curve with gradient */}
+                            <polyline
+                              fill="none"
+                              stroke="url(#curveGradient)"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              points={lampAnalysis.predictions
+                                .filter(p => {
+                                  const y = 100 - (p.intensity / currentLamp.initialIntensity) * 100;
+                                  return y <= 100;
+                                })
+                                .map(p => {
+                                  const x = (p.hours / currentLamp.maxHours) * 100;
+                                  const y = Math.min(100, 100 - (p.intensity / currentLamp.initialIntensity) * 100);
+                                  return `${x},${y}`;
+                                })
+                                .join(' ')}
+                            />
+
+                            {/* Actual readings as dots with white border */}
+                            {currentLamp.readings.map((reading, i) => {
+                              const x = (reading.hours / currentLamp.maxHours) * 100;
+                              const y = Math.min(100, 100 - (reading.intensity / currentLamp.initialIntensity) * 100);
+                              return (
+                                <g key={i}>
+                                  <circle cx={x} cy={y} r="3.5" fill="white" />
+                                  <circle cx={x} cy={y} r="2.5" fill="#3b82f6" />
+                                </g>
+                              );
+                            })}
+                          </g>
+                        </svg>
+
+                        {/* Target label */}
+                        <div
+                          className="absolute right-2 text-xs text-red-500 bg-white px-1 rounded"
+                          style={{ top: `${100 - (currentLamp.targetIntensity / currentLamp.initialIntensity) * 100}%`, transform: 'translateY(-50%)' }}
+                        >
+                          Target: {currentLamp.targetIntensity}
+                        </div>
+                      </div>
+
+                      {/* X-Axis Values */}
+                      <div className="flex justify-between text-xs text-gray-500 mt-2 px-1">
+                        <span>0</span>
+                        <span>{Math.round(currentLamp.maxHours * 0.25)}</span>
+                        <span>{Math.round(currentLamp.maxHours * 0.5)}</span>
+                        <span>{Math.round(currentLamp.maxHours * 0.75)}</span>
+                        <span>{currentLamp.maxHours}</span>
+                      </div>
+
+                      {/* X-Axis Label */}
+                      <div className="text-center mt-1">
+                        <span className="text-xs text-gray-500">Lamp Hours</span>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-center gap-6 mt-4 text-sm">
+                  {/* Legend */}
+                  <div className="flex items-center justify-center gap-8 mt-6 pt-4 border-t border-gray-100">
                     <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-blue-500" />
-                      <span className="text-gray-600">Actual readings</span>
+                      <div className="w-3 h-3 rounded-full bg-blue-500 ring-2 ring-white shadow-sm" />
+                      <span className="text-sm text-gray-600">Actual readings</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className="w-4 h-0.5 bg-yellow-500" />
-                      <span className="text-gray-600">Predicted curve</span>
+                      <div className="w-6 h-0.5 bg-gradient-to-r from-yellow-500 to-amber-500 rounded-full" />
+                      <span className="text-sm text-gray-600">Predicted curve</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className="w-4 h-0.5 bg-red-500 border-dashed" style={{ borderTopWidth: 1 }} />
-                      <span className="text-gray-600">Target minimum</span>
+                      <div className="w-6 h-0 border-t-2 border-dashed border-red-400" />
+                      <span className="text-sm text-gray-600">Target minimum</span>
                     </div>
                   </div>
                 </div>
