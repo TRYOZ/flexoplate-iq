@@ -17,3 +17,8 @@ tiktoken==0.6.0
 # Knowledge Scraper
 beautifulsoup4==4.12.3
 lxml==5.1.0
+
+# Knowledge Loader (PDF, Excel)
+pypdf==4.0.1
+openpyxl==3.1.2
+python-multipart==0.0.9
