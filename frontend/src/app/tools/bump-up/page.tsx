@@ -28,7 +28,7 @@ export default function BumpUpCalculatorPage() {
   const [targetShadow, setTargetShadow] = useState<number>(95);
   const [copied, setCopied] = useState(false);
 
-  const tviValues = selectedPreset === 'custom' ? customTvi : TVI_PRESETS[selectedPreset].values;
+  const tviValues: Record<number, number> = selectedPreset === 'custom' ? customTvi : TVI_PRESETS[selectedPreset].values;
 
   // Calculate bump curve
   const bumpCurve = useMemo(() => {
@@ -43,17 +43,19 @@ export default function BumpUpCalculatorPage() {
         // Interpolate TVI from the defined points
         const keys = Object.keys(tviValues).map(Number).sort((a, b) => a - b);
 
-        if (input <= keys[0]) {
-          tvi = (tviValues[keys[0]] || 0) * (input / keys[0]);
+        if (keys.length === 0) {
+          tvi = 0;
+        } else if (input <= keys[0]) {
+          tvi = (tviValues[keys[0]] ?? 0) * (input / keys[0]);
         } else if (input >= keys[keys.length - 1]) {
           const lastKey = keys[keys.length - 1];
-          tvi = (tviValues[lastKey] || 0) * ((100 - input) / (100 - lastKey));
+          tvi = (tviValues[lastKey] ?? 0) * ((100 - input) / (100 - lastKey));
         } else {
           // Find surrounding points
           for (let i = 0; i < keys.length - 1; i++) {
             if (input >= keys[i] && input <= keys[i + 1]) {
               const ratio = (input - keys[i]) / (keys[i + 1] - keys[i]);
-              tvi = (tviValues[keys[i]] || 0) + ratio * ((tviValues[keys[i + 1]] || 0) - (tviValues[keys[i]] || 0));
+              tvi = (tviValues[keys[i]] ?? 0) + ratio * ((tviValues[keys[i + 1]] ?? 0) - (tviValues[keys[i]] ?? 0));
               break;
             }
           }
