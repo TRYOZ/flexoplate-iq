@@ -250,63 +250,142 @@ export default function BumpUpCalculatorPage() {
           <div className="lg:col-span-2 space-y-6">
             {/* Visual Curve */}
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-gray-900">Bump Curve Visualization</h2>
+              <h2 className="text-lg font-semibold text-gray-900 mb-6">Bump Curve Visualization</h2>
+
+              {/* Chart Container */}
+              <div className="flex">
+                {/* Y-Axis Label */}
+                <div className="flex items-center mr-2">
+                  <span className="text-xs text-gray-500 -rotate-90 whitespace-nowrap">
+                    Output (%)
+                  </span>
+                </div>
+
+                {/* Y-Axis Values */}
+                <div className="flex flex-col justify-between text-xs text-gray-500 pr-2 py-2 text-right" style={{ height: '240px', width: '28px' }}>
+                  <span>100</span>
+                  <span>75</span>
+                  <span>50</span>
+                  <span>25</span>
+                  <span>0</span>
+                </div>
+
+                {/* Chart Area */}
+                <div className="flex-1">
+                  <div
+                    className="relative bg-gradient-to-b from-gray-50 to-white rounded-lg border border-gray-200"
+                    style={{ height: '240px' }}
+                  >
+                    {/* Horizontal Grid Lines */}
+                    {[0, 25, 50, 75, 100].map((percent) => (
+                      <div
+                        key={percent}
+                        className="absolute left-0 right-0 border-t border-gray-100"
+                        style={{ top: `${percent}%` }}
+                      />
+                    ))}
+
+                    {/* Vertical Grid Lines */}
+                    {[0, 25, 50, 75, 100].map((percent) => (
+                      <div
+                        key={percent}
+                        className="absolute top-0 bottom-0 border-l border-gray-100"
+                        style={{ left: `${percent}%` }}
+                      />
+                    ))}
+
+                    {/* SVG Chart */}
+                    <svg
+                      className="absolute inset-0 w-full h-full"
+                      viewBox="0 0 100 100"
+                      preserveAspectRatio="none"
+                    >
+                      <defs>
+                        <linearGradient id="bumpCurveGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%" stopColor="#f97316" />
+                          <stop offset="100%" stopColor="#ea580c" />
+                        </linearGradient>
+                      </defs>
+
+                      {/* Diagonal reference line (no gain / linear) */}
+                      <line
+                        x1="0"
+                        y1="100"
+                        x2="100"
+                        y2="0"
+                        stroke="#94a3b8"
+                        strokeWidth="1"
+                        strokeDasharray="4,4"
+                        opacity="0.6"
+                      />
+
+                      {/* Output curve (with TVI) */}
+                      <polyline
+                        fill="none"
+                        stroke="url(#bumpCurveGradient)"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        points={bumpCurve.map(p => `${p.input},${100 - p.output}`).join(' ')}
+                      />
+
+                      {/* Data points with white border */}
+                      {bumpCurve.filter((_, i) => i % 2 === 0).map((point, i) => (
+                        <g key={i}>
+                          <circle
+                            cx={point.input}
+                            cy={100 - point.output}
+                            r="3"
+                            fill="white"
+                          />
+                          <circle
+                            cx={point.input}
+                            cy={100 - point.output}
+                            r="2"
+                            fill="#f97316"
+                          />
+                        </g>
+                      ))}
+                    </svg>
+
+                    {/* 50% marker label */}
+                    <div
+                      className="absolute text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-medium"
+                      style={{
+                        left: '50%',
+                        top: `${100 - (bumpCurve.find(p => p.input === 50)?.output || 50)}%`,
+                        transform: 'translate(8px, -50%)'
+                      }}
+                    >
+                      {bumpCurve.find(p => p.input === 50)?.output}%
+                    </div>
+                  </div>
+
+                  {/* X-Axis Values */}
+                  <div className="flex justify-between text-xs text-gray-500 mt-2 px-1">
+                    <span>0</span>
+                    <span>25</span>
+                    <span>50</span>
+                    <span>75</span>
+                    <span>100</span>
+                  </div>
+
+                  {/* X-Axis Label */}
+                  <div className="text-center mt-1">
+                    <span className="text-xs text-gray-500">Input (%)</span>
+                  </div>
+                </div>
               </div>
 
-              <div className="h-64 relative bg-gray-50 rounded-lg p-4">
-                {/* Grid lines */}
-                <div className="absolute inset-4 grid grid-cols-10 grid-rows-5">
-                  {[...Array(50)].map((_, i) => (
-                    <div key={i} className="border-l border-t border-gray-200" />
-                  ))}
-                </div>
-
-                {/* Diagonal reference line (no gain) */}
-                <svg className="absolute inset-4" viewBox="0 0 100 100" preserveAspectRatio="none">
-                  <line x1="0" y1="100" x2="100" y2="0" stroke="#ddd" strokeWidth="0.5" strokeDasharray="2,2" />
-
-                  {/* Output curve (with TVI) */}
-                  <polyline
-                    fill="none"
-                    stroke="#f97316"
-                    strokeWidth="1.5"
-                    points={bumpCurve.map(p => `${p.input},${100 - p.output}`).join(' ')}
-                  />
-
-                  {/* Data points */}
-                  {bumpCurve.filter((_, i) => i % 2 === 0).map((point, i) => (
-                    <circle
-                      key={i}
-                      cx={point.input}
-                      cy={100 - point.output}
-                      r="1.5"
-                      fill="#f97316"
-                    />
-                  ))}
-                </svg>
-
-                {/* Axis labels */}
-                <div className="absolute bottom-0 left-4 right-4 flex justify-between text-xs text-gray-500">
-                  <span>0%</span>
-                  <span>50%</span>
-                  <span>100%</span>
-                </div>
-                <div className="absolute left-0 top-4 bottom-4 flex flex-col justify-between text-xs text-gray-500">
-                  <span>100%</span>
-                  <span>50%</span>
-                  <span>0%</span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-center gap-6 mt-4 text-sm">
+              {/* Legend */}
+              <div className="flex items-center justify-center gap-8 mt-6 pt-4 border-t border-gray-100">
                 <div className="flex items-center gap-2">
-                  <div className="w-4 h-0.5 bg-orange-500" />
-                  <span className="text-gray-600">Output with TVI</span>
+                  <div className="w-6 h-0.5 bg-gradient-to-r from-orange-500 to-orange-600 rounded-full" />
+                  <span className="text-sm text-gray-600">Output with TVI</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className="w-4 h-0.5 bg-gray-300 border-dashed" style={{ borderTopWidth: 1 }} />
-                  <span className="text-gray-600">Linear (no gain)</span>
+                  <div className="w-6 h-0 border-t-2 border-dashed border-slate-400" />
+                  <span className="text-sm text-gray-600">Linear (no gain)</span>
                 </div>
               </div>
             </div>
