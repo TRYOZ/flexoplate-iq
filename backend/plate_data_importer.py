@@ -104,6 +104,7 @@ class ImportFromDownloadPageRequest(BaseModel):
     supplier_name: str
     auto_create_plates: bool = False
     max_pdfs: int = 20
+    filter_flexo_only: bool = True  # Only process flexographic plate PDFs, skip equipment/sleeves/etc.
 
 
 # ============================================================================
@@ -155,13 +156,48 @@ async def extract_text_from_pdf(pdf_content: bytes) -> str:
         raise HTTPException(status_code=400, detail=f"PDF extraction failed: {str(e)}")
 
 
-def extract_pdf_links(html: str, base_url: str) -> List[Dict[str, str]]:
-    """Extract PDF links from HTML page"""
+def extract_pdf_links(html: str, base_url: str, filter_flexo_plates: bool = True) -> List[Dict[str, str]]:
+    """
+    Extract PDF links from HTML page
+
+    Args:
+        html: HTML content
+        base_url: Base URL for resolving relative links
+        filter_flexo_plates: If True, only return PDFs likely to be flexo plate data sheets
+    """
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(html, 'html.parser')
     pdf_links = []
     seen_urls = set()
+
+    # Keywords that indicate flexo plates (include)
+    FLEXO_PLATE_KEYWORDS = [
+        'nyloflex', 'nyloprint', 'rotec',  # XSYS flexo brands
+        'cyrel', 'cyrel easy', 'cyrel fast',  # DuPont/Corteva
+        'flexcel', 'nxc', 'nxh',  # Miraclon
+        'afp', 'atp', 'awp', 'clf', 'asahi',  # Asahi
+        'dph', 'dpf', 'digital plate',  # MacDermid
+        'flenex', 'fuji',  # Fujifilm
+        'flexo', 'photopolymer plate', 'printing plate',
+        'plate data', 'data sheet', 'technical data',
+        'tds', 'product data',
+    ]
+
+    # Keywords that indicate NON-flexo products (exclude)
+    EXCLUDE_KEYWORDS = [
+        'letterpress', 'letter press',
+        'sleeve', 'adapter', 'bridge',
+        'tape', 'adhesive', 'mounting',
+        'blanket', 'rubber',
+        'cleaner', 'solvent', 'washout',
+        'processor', 'equipment', 'machine',
+        'dryer', 'exposure unit', 'imager',
+        'anilox', 'doctor blade',
+        'ink', 'coating',
+        'safety data', 'sds', 'msds',
+        'brochure', 'catalog', 'overview',  # General marketing, not tech specs
+    ]
 
     for a in soup.find_all('a', href=True):
         href = a['href']
@@ -182,6 +218,20 @@ def extract_pdf_links(html: str, base_url: str) -> List[Dict[str, str]]:
             if not title or len(title) < 3:
                 filename = href.split('/')[-1].replace('.pdf', '').replace('-', ' ').replace('_', ' ')
                 title = filename.title()
+
+            # Apply filtering if enabled
+            if filter_flexo_plates:
+                combined_text = (title + ' ' + href).lower()
+
+                # Check for exclusions first
+                is_excluded = any(kw in combined_text for kw in EXCLUDE_KEYWORDS)
+                if is_excluded:
+                    continue
+
+                # Check for flexo plate keywords
+                is_flexo_plate = any(kw in combined_text for kw in FLEXO_PLATE_KEYWORDS)
+                if not is_flexo_plate:
+                    continue
 
             pdf_links.append({'url': full_url, 'title': title[:200]})
 
@@ -215,12 +265,30 @@ async def fetch_page(url: str) -> str:
 # AI-POWERED PLATE INFO EXTRACTION
 # ============================================================================
 
-PLATE_EXTRACTION_PROMPT = """You are an expert at extracting flexographic plate specifications from technical documents.
+PLATE_EXTRACTION_PROMPT = """You are an expert at extracting FLEXOGRAPHIC PLATE specifications from technical documents.
 
-Analyze the following text from a plate data sheet/brochure and extract all plate specifications.
+FIRST: Determine if this document is about FLEXOGRAPHIC PRINTING PLATES (photopolymer plates for flexo printing).
 
-IMPORTANT: This may be a multi-page document with specifications for MULTIPLE plate variants (different thicknesses).
-Extract information for ALL plates/variants mentioned.
+Documents that ARE flexo plates:
+- nyloflex, nyloprint (XSYS)
+- Cyrel, Cyrel EASY (DuPont)
+- FLEXCEL NX (Miraclon)
+- AFP, AWP, ATP (Asahi)
+- Photopolymer plate data sheets with thickness, hardness, exposure specs
+
+Documents that are NOT flexo plates (return empty array []):
+- Letterpress plates
+- Sleeves, adapters, bridges
+- Equipment (processors, imagers, exposure units)
+- Mounting tapes, adhesives
+- Inks, coatings, cleaners
+- Safety data sheets (SDS/MSDS)
+- General product catalogs/brochures without technical specs
+- Anilox rolls, doctor blades
+
+If this is NOT a flexographic plate technical data sheet, return: []
+
+If it IS a flexo plate document, extract info for ALL plate variants (different thicknesses):
 
 For each plate variant, extract:
 - plate_name: Full product name (e.g., "nyloflex FTF 1.14mm", "Cyrel EASY EFX 1.70")
@@ -240,7 +308,7 @@ For each plate variant, extract:
 - substrate_categories: Array like ["film", "paper", "foil"]
 - description: Brief description of the plate
 
-Return a JSON array of plate objects. Each object should have the extracted fields.
+Return a JSON array of plate objects. If not a flexo plate document, return empty array [].
 If a field is not found, omit it or set to null.
 
 TEXT TO ANALYZE:
@@ -742,13 +810,14 @@ async def import_from_download_page(request: ImportFromDownloadPageRequest, back
     # Fetch the download page
     html = await fetch_page(request.url)
 
-    # Extract PDF links
-    pdf_links = extract_pdf_links(html, request.url)
+    # Extract PDF links (filtered to flexo plates only by default)
+    pdf_links = extract_pdf_links(html, request.url, filter_flexo_plates=request.filter_flexo_only)
 
     if not pdf_links:
         return {
             "status": "no_pdfs_found",
-            "message": "No PDF links found on this page"
+            "message": "No flexographic plate PDFs found on this page" if request.filter_flexo_only else "No PDF links found on this page",
+            "hint": "The page may contain equipment, sleeves, or other non-plate PDFs which are filtered out by default."
         }
 
     # Limit PDFs
