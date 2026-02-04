@@ -913,6 +913,299 @@ async def get_knowledge_stats():
         }
 
 
+# ============================================================================
+# PDF EXTRACTION FROM DOWNLOAD PAGES
+# ============================================================================
+
+def extract_pdf_links(html: str, base_url: str) -> List[Dict[str, str]]:
+    """
+    Extract PDF links from an HTML page (like a download/resources page)
+
+    Returns:
+        List of dicts with 'url', 'title', 'description'
+    """
+    soup = BeautifulSoup(html, 'html.parser')
+    pdf_links = []
+    seen_urls = set()
+
+    # Find all links to PDFs
+    for a in soup.find_all('a', href=True):
+        href = a['href']
+
+        # Check if it's a PDF link
+        if '.pdf' in href.lower():
+            # Make absolute URL
+            if href.startswith('/'):
+                parsed = urlparse(base_url)
+                full_url = f"{parsed.scheme}://{parsed.netloc}{href}"
+            elif not href.startswith('http'):
+                full_url = urljoin(base_url, href)
+            else:
+                full_url = href
+
+            # Avoid duplicates
+            if full_url in seen_urls:
+                continue
+            seen_urls.add(full_url)
+
+            # Get title from link text or nearby elements
+            title = a.get_text(strip=True)
+            if not title or len(title) < 3:
+                # Try to get title from parent
+                parent = a.find_parent(['div', 'li', 'td', 'p'])
+                if parent:
+                    title = parent.get_text(strip=True)[:100]
+
+            # Get description from title attribute or surrounding text
+            description = a.get('title', '')
+            if not description:
+                # Try to find description nearby
+                next_p = a.find_next('p')
+                if next_p and next_p.parent == a.parent:
+                    description = next_p.get_text(strip=True)[:200]
+
+            # Extract filename as fallback title
+            if not title or title == href:
+                filename = href.split('/')[-1].replace('.pdf', '').replace('-', ' ').replace('_', ' ')
+                title = filename.title()
+
+            pdf_links.append({
+                'url': full_url,
+                'title': title[:200] if title else 'Untitled PDF',
+                'description': description
+            })
+
+    return pdf_links
+
+
+async def download_pdf(url: str) -> bytes:
+    """
+    Download a PDF file
+
+    Returns:
+        PDF content as bytes
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/pdf,*/*",
+    }
+
+    # Try ZenRows first if available (for protected sites)
+    if ZENROWS_API_KEY:
+        params = {
+            "apikey": ZENROWS_API_KEY,
+            "url": url,
+            "premium_proxy": "true",
+        }
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            try:
+                response = await client.get(ZENROWS_BASE_URL, params=params)
+                if response.status_code == 200:
+                    return response.content
+            except Exception as e:
+                print(f"ZenRows PDF download failed: {e}, trying direct")
+
+    # Direct download fallback
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+        response = await client.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.content
+        else:
+            raise HTTPException(status_code=response.status_code, detail=f"Failed to download PDF: {url}")
+
+
+async def extract_text_from_pdf(pdf_content: bytes) -> str:
+    """
+    Extract text from PDF content
+
+    Returns:
+        Extracted text as string
+    """
+    import io
+
+    try:
+        import pypdf
+
+        pdf_reader = pypdf.PdfReader(io.BytesIO(pdf_content))
+        text_parts = []
+
+        for page in pdf_reader.pages:
+            text = page.extract_text()
+            if text:
+                text_parts.append(text)
+
+        return '\n\n'.join(text_parts)
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PDF processing library (pypdf) not installed")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to extract PDF text: {str(e)}")
+
+
+class ScrapeDownloadPageRequest(BaseModel):
+    url: str
+    category: Optional[str] = "plates"
+    supplier_name: Optional[str] = None
+    max_pdfs: int = 10  # Limit to avoid overwhelming
+
+
+@router.post("/scrape/download-page")
+async def scrape_download_page(request: ScrapeDownloadPageRequest, background_tasks: BackgroundTasks):
+    """
+    Scrape a download/resources page that contains PDF links.
+
+    This endpoint:
+    1. Fetches the download page
+    2. Extracts all PDF links
+    3. Downloads each PDF
+    4. Extracts text from PDFs
+    5. Stores the content in the knowledge base
+
+    Great for pages like https://xsysglobal.com/download-area/
+    """
+    pool = await get_db_pool()
+    if not pool:
+        raise HTTPException(status_code=500, detail="Database not available")
+
+    # First, scrape the download page to get PDF links
+    result = await scrape_url_zenrows(request.url, js_render=True)
+
+    if result['status'] != 'success':
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to fetch download page: {result.get('error')}"
+        )
+
+    # Extract PDF links
+    pdf_links = extract_pdf_links(result['html'], request.url)
+
+    if not pdf_links:
+        # Return info about what was found on the page
+        extracted = extract_content(result['html'])
+        return {
+            "status": "no_pdfs_found",
+            "page_title": extracted['title'],
+            "page_word_count": extracted['word_count'],
+            "links_found": len(extracted['links']),
+            "message": "No PDF links found on this page. The page may require JavaScript or have a different structure."
+        }
+
+    # Limit number of PDFs
+    pdf_links = pdf_links[:request.max_pdfs]
+
+    # Process PDFs in background
+    async def process_pdfs():
+        results = []
+        for pdf_info in pdf_links:
+            try:
+                # Download PDF
+                pdf_content = await download_pdf(pdf_info['url'])
+
+                # Extract text
+                text = await extract_text_from_pdf(pdf_content)
+
+                if len(text.split()) < 50:
+                    results.append({
+                        "url": pdf_info['url'],
+                        "title": pdf_info['title'],
+                        "status": "skipped",
+                        "reason": "insufficient_content"
+                    })
+                    continue
+
+                # Store in knowledge base
+                doc_id, is_new = await store_document(
+                    pool=pool,
+                    title=pdf_info['title'],
+                    content=text,
+                    source_url=pdf_info['url'],
+                    source_type="pdf_download",
+                    source_name=request.supplier_name or urlparse(request.url).netloc,
+                    category=request.category
+                )
+
+                results.append({
+                    "url": pdf_info['url'],
+                    "title": pdf_info['title'],
+                    "status": "success",
+                    "document_id": doc_id,
+                    "is_new": is_new,
+                    "word_count": len(text.split())
+                })
+
+            except Exception as e:
+                results.append({
+                    "url": pdf_info['url'],
+                    "title": pdf_info['title'],
+                    "status": "error",
+                    "error": str(e)
+                })
+
+            # Delay between downloads to be respectful
+            await asyncio.sleep(SCRAPE_DELAY_SECONDS)
+
+        return results
+
+    background_tasks.add_task(process_pdfs)
+
+    return {
+        "status": "started",
+        "page_url": request.url,
+        "pdfs_found": len(pdf_links),
+        "pdfs_to_process": len(pdf_links),
+        "pdf_links": pdf_links,
+        "message": f"Found {len(pdf_links)} PDFs. Processing in background..."
+    }
+
+
+@router.post("/scrape/pdf")
+async def scrape_single_pdf(
+    url: str,
+    title: Optional[str] = None,
+    category: str = "plates",
+    supplier_name: Optional[str] = None
+):
+    """
+    Download and extract content from a single PDF URL
+    """
+    pool = await get_db_pool()
+    if not pool:
+        raise HTTPException(status_code=500, detail="Database not available")
+
+    # Download PDF
+    pdf_content = await download_pdf(url)
+
+    # Extract text
+    text = await extract_text_from_pdf(pdf_content)
+
+    if len(text.split()) < 50:
+        raise HTTPException(status_code=400, detail="PDF has insufficient text content")
+
+    # Generate title from filename if not provided
+    if not title:
+        filename = url.split('/')[-1].replace('.pdf', '').replace('-', ' ').replace('_', ' ')
+        title = filename.title()
+
+    # Store in knowledge base
+    doc_id, is_new = await store_document(
+        pool=pool,
+        title=title,
+        content=text,
+        source_url=url,
+        source_type="pdf_download",
+        source_name=supplier_name or urlparse(url).netloc,
+        category=category
+    )
+
+    return {
+        "status": "success",
+        "document_id": doc_id,
+        "is_new": is_new,
+        "title": title,
+        "word_count": len(text.split()),
+        "chunks_created": len(chunk_text(text))
+    }
+
+
 @router.get("/health")
 async def health_check():
     """Health check for knowledge scraper"""
