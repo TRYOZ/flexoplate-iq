@@ -727,8 +727,22 @@ async def tool_get_equipment_info(pool, args: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+async def check_has_vector_column(conn) -> bool:
+    """Check if the embedding column exists in knowledge_chunks table"""
+    try:
+        result = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'knowledge_chunks' AND column_name = 'embedding'
+            )
+        """)
+        return result
+    except:
+        return False
+
+
 async def tool_search_knowledge(pool, args: Dict[str, Any]) -> Dict[str, Any]:
-    """Search the knowledge base using semantic similarity"""
+    """Search the knowledge base using semantic similarity or full-text search fallback"""
     if not pool:
         return {"error": "Database not available", "results": []}
 
@@ -739,48 +753,91 @@ async def tool_search_knowledge(pool, args: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": "Query is required", "results": []}
 
     try:
-        # Generate embedding for the query
-        client = get_openai_client()
-        response = await client.embeddings.create(
-            model="text-embedding-3-small",
-            input=query,
-            dimensions=1536
-        )
-        query_embedding = response.data[0].embedding
-
-        # Search with vector similarity
         async with pool.acquire() as conn:
-            if category:
-                results = await conn.fetch("""
-                    SELECT
-                        kc.chunk_text,
-                        kd.title,
-                        kd.category,
-                        kd.source_url,
-                        1 - (kc.embedding <=> $1::vector) as similarity
-                    FROM knowledge_chunks kc
-                    JOIN knowledge_documents kd ON kc.document_id = kd.id
-                    WHERE kd.is_active = TRUE
-                      AND kd.category = $2
-                      AND 1 - (kc.embedding <=> $1::vector) > 0.6
-                    ORDER BY kc.embedding <=> $1::vector
-                    LIMIT 5
-                """, json.dumps(query_embedding), category)
-            else:
-                results = await conn.fetch("""
-                    SELECT
-                        kc.chunk_text,
-                        kd.title,
-                        kd.category,
-                        kd.source_url,
-                        1 - (kc.embedding <=> $1::vector) as similarity
-                    FROM knowledge_chunks kc
-                    JOIN knowledge_documents kd ON kc.document_id = kd.id
-                    WHERE kd.is_active = TRUE
-                      AND 1 - (kc.embedding <=> $1::vector) > 0.6
-                    ORDER BY kc.embedding <=> $1::vector
-                    LIMIT 5
-                """, json.dumps(query_embedding))
+            # Check if we have vector support
+            has_vector = await check_has_vector_column(conn)
+            results = None
+
+            if has_vector:
+                # Try vector similarity search
+                try:
+                    # Generate embedding for the query
+                    client = get_openai_client()
+                    response = await client.embeddings.create(
+                        model="text-embedding-3-small",
+                        input=query,
+                        dimensions=1536
+                    )
+                    query_embedding = response.data[0].embedding
+
+                    if category:
+                        results = await conn.fetch("""
+                            SELECT
+                                kc.chunk_text,
+                                kd.title,
+                                kd.category,
+                                kd.source_url,
+                                1 - (kc.embedding <=> $1::vector) as similarity
+                            FROM knowledge_chunks kc
+                            JOIN knowledge_documents kd ON kc.document_id = kd.id
+                            WHERE kd.is_active = TRUE
+                              AND kd.category = $2
+                              AND 1 - (kc.embedding <=> $1::vector) > 0.6
+                            ORDER BY kc.embedding <=> $1::vector
+                            LIMIT 5
+                        """, json.dumps(query_embedding), category)
+                    else:
+                        results = await conn.fetch("""
+                            SELECT
+                                kc.chunk_text,
+                                kd.title,
+                                kd.category,
+                                kd.source_url,
+                                1 - (kc.embedding <=> $1::vector) as similarity
+                            FROM knowledge_chunks kc
+                            JOIN knowledge_documents kd ON kc.document_id = kd.id
+                            WHERE kd.is_active = TRUE
+                              AND 1 - (kc.embedding <=> $1::vector) > 0.6
+                            ORDER BY kc.embedding <=> $1::vector
+                            LIMIT 5
+                        """, json.dumps(query_embedding))
+                except Exception as e:
+                    print(f"Vector search failed, falling back to text search: {e}")
+                    results = None
+
+            # Fallback: Full-text search
+            if results is None:
+                if category:
+                    results = await conn.fetch("""
+                        SELECT
+                            kc.chunk_text,
+                            kd.title,
+                            kd.category,
+                            kd.source_url,
+                            ts_rank(to_tsvector('english', kc.chunk_text), plainto_tsquery('english', $1)) as similarity
+                        FROM knowledge_chunks kc
+                        JOIN knowledge_documents kd ON kc.document_id = kd.id
+                        WHERE kd.is_active = TRUE
+                          AND kd.category = $2
+                          AND to_tsvector('english', kc.chunk_text) @@ plainto_tsquery('english', $1)
+                        ORDER BY similarity DESC
+                        LIMIT 5
+                    """, query, category)
+                else:
+                    results = await conn.fetch("""
+                        SELECT
+                            kc.chunk_text,
+                            kd.title,
+                            kd.category,
+                            kd.source_url,
+                            ts_rank(to_tsvector('english', kc.chunk_text), plainto_tsquery('english', $1)) as similarity
+                        FROM knowledge_chunks kc
+                        JOIN knowledge_documents kd ON kc.document_id = kd.id
+                        WHERE kd.is_active = TRUE
+                          AND to_tsvector('english', kc.chunk_text) @@ plainto_tsquery('english', $1)
+                        ORDER BY similarity DESC
+                        LIMIT 5
+                    """, query)
 
             if not results:
                 return {
@@ -796,7 +853,7 @@ async def tool_search_knowledge(pool, args: Dict[str, Any]) -> Dict[str, Any]:
                     "title": row["title"],
                     "category": row["category"],
                     "source": row["source_url"],
-                    "relevance": round(float(row["similarity"]), 3)
+                    "relevance": round(float(row["similarity"]), 3) if row["similarity"] else 0.5
                 })
 
             return {

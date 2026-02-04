@@ -253,6 +253,20 @@ def content_hash(content: str) -> str:
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
+async def check_has_vector_column(conn) -> bool:
+    """Check if the embedding column exists in knowledge_chunks table"""
+    try:
+        result = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'knowledge_chunks' AND column_name = 'embedding'
+            )
+        """)
+        return result
+    except:
+        return False
+
+
 async def store_knowledge(
     pool: asyncpg.Pool,
     title: str,
@@ -265,7 +279,7 @@ async def store_knowledge(
     source_url: str = None,
     supplier_id: str = None
 ) -> Tuple[str, bool]:
-    """Store document with chunks and embeddings"""
+    """Store document with chunks and embeddings (if pgvector available)"""
     hash_val = content_hash(content)
 
     async with pool.acquire() as conn:
@@ -288,20 +302,43 @@ async def store_knowledge(
         """, source_url, source_type, source_name, title, content, hash_val,
             category, subcategory, tags, supplier_id, len(content.split()))
 
-        # Chunk and embed
+        # Chunk the content
         chunks = chunk_text(content)
 
         if chunks:
-            chunk_texts = [c['text'] for c in chunks]
-            embeddings = await generate_embeddings(chunk_texts)
+            # Check if we have vector support
+            has_vector = await check_has_vector_column(conn)
 
-            for chunk, embedding in zip(chunks, embeddings):
-                await conn.execute("""
-                    INSERT INTO knowledge_chunks
-                    (document_id, chunk_index, chunk_text, chunk_tokens, embedding)
-                    VALUES ($1, $2, $3, $4, $5)
-                """, doc_id, chunk['index'], chunk['text'], chunk['tokens'],
-                    json.dumps(embedding))
+            if has_vector:
+                # Generate embeddings and store with vectors
+                try:
+                    chunk_texts = [c['text'] for c in chunks]
+                    embeddings = await generate_embeddings(chunk_texts)
+
+                    for chunk, embedding in zip(chunks, embeddings):
+                        await conn.execute("""
+                            INSERT INTO knowledge_chunks
+                            (document_id, chunk_index, chunk_text, chunk_tokens, embedding)
+                            VALUES ($1, $2, $3, $4, $5)
+                        """, doc_id, chunk['index'], chunk['text'], chunk['tokens'],
+                            json.dumps(embedding))
+                except Exception as e:
+                    print(f"Error storing embeddings, falling back to text-only: {e}")
+                    # Fallback: store without embeddings
+                    for chunk in chunks:
+                        await conn.execute("""
+                            INSERT INTO knowledge_chunks
+                            (document_id, chunk_index, chunk_text, chunk_tokens)
+                            VALUES ($1, $2, $3, $4)
+                        """, doc_id, chunk['index'], chunk['text'], chunk['tokens'])
+            else:
+                # No vector support - store chunks without embeddings
+                for chunk in chunks:
+                    await conn.execute("""
+                        INSERT INTO knowledge_chunks
+                        (document_id, chunk_index, chunk_text, chunk_tokens)
+                        VALUES ($1, $2, $3, $4)
+                    """, doc_id, chunk['index'], chunk['text'], chunk['tokens'])
 
         return str(doc_id), True
 
