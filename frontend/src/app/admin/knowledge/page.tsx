@@ -57,6 +57,13 @@ export default function KnowledgeAdminPage() {
   const [scraping, setScraping] = useState(false);
   const [scrapeResult, setScrapeResult] = useState<any>(null);
 
+  // Download page scrape state
+  const [downloadPageUrl, setDownloadPageUrl] = useState('');
+  const [downloadPageCategory, setDownloadPageCategory] = useState('plates');
+  const [downloadPageSupplier, setDownloadPageSupplier] = useState('');
+  const [downloadPageScraping, setDownloadPageScraping] = useState(false);
+  const [downloadPageResult, setDownloadPageResult] = useState<any>(null);
+
   // Seed state
   const [seedOptions, setSeedOptions] = useState({
     include_core_knowledge: true,
@@ -207,6 +214,39 @@ export default function KnowledgeAdminPage() {
       setScrapeResult({ error: 'Scrape failed' });
     } finally {
       setScraping(false);
+    }
+  };
+
+  const handleDownloadPageScrape = async () => {
+    if (!downloadPageUrl) return;
+
+    setDownloadPageScraping(true);
+    setDownloadPageResult(null);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/knowledge/scrape/download-page`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: downloadPageUrl,
+          category: downloadPageCategory,
+          supplier_name: downloadPageSupplier || null,
+          max_pdfs: 15
+        })
+      });
+
+      const result = await res.json();
+      setDownloadPageResult(result);
+
+      if (res.ok && result.status === 'started') {
+        // Refresh stats after some time to see the new documents
+        setTimeout(() => loadStats(), 10000);
+        setDownloadPageUrl('');
+      }
+    } catch (err) {
+      setDownloadPageResult({ error: 'Failed to scrape download page' });
+    } finally {
+      setDownloadPageScraping(false);
     }
   };
 
@@ -523,9 +563,99 @@ export default function KnowledgeAdminPage() {
         {/* Scrape Tab */}
         {activeTab === 'scrape' && (
           <div className="space-y-6">
+            {/* Download Page Scraper - Featured prominently */}
+            <div className="bg-gradient-to-r from-purple-900/50 to-indigo-900/50 border border-purple-600 rounded-lg p-6">
+              <h2 className="text-xl font-semibold mb-2 text-purple-300">Scrape Download/Resources Page</h2>
+              <p className="text-gray-400 mb-6">
+                For pages like XSYS download area that contain PDF brochures. This will find all PDF links,
+                download them, extract the text, and add to the knowledge base.
+              </p>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Download Page URL</label>
+                  <input
+                    type="url"
+                    value={downloadPageUrl}
+                    onChange={e => setDownloadPageUrl(e.target.value)}
+                    placeholder="https://xsysglobal.com/download-area/"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Category</label>
+                    <select
+                      value={downloadPageCategory}
+                      onChange={e => setDownloadPageCategory(e.target.value)}
+                      className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white"
+                    >
+                      {categories.map(cat => (
+                        <option key={cat} value={cat}>{cat.replace('_', ' ')}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Supplier Name</label>
+                    <input
+                      type="text"
+                      value={downloadPageSupplier}
+                      onChange={e => setDownloadPageSupplier(e.target.value)}
+                      placeholder="e.g., XSYS"
+                      className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleDownloadPageScrape}
+                  disabled={!downloadPageUrl || downloadPageScraping}
+                  className="w-full py-3 bg-purple-600 hover:bg-purple-700 rounded-lg font-medium disabled:opacity-50"
+                >
+                  {downloadPageScraping ? 'Finding PDFs...' : 'Scrape PDFs from Page'}
+                </button>
+
+                {downloadPageResult && (
+                  <div className={`p-4 rounded-lg ${
+                    downloadPageResult.error || downloadPageResult.status === 'no_pdfs_found'
+                      ? 'bg-red-900/50 text-red-300'
+                      : 'bg-green-900/50 text-green-300'
+                  }`}>
+                    {downloadPageResult.error ? (
+                      <p>Error: {downloadPageResult.error || downloadPageResult.detail}</p>
+                    ) : downloadPageResult.status === 'no_pdfs_found' ? (
+                      <div>
+                        <p className="font-medium">No PDFs found on page</p>
+                        <p className="text-sm mt-1">Page title: {downloadPageResult.page_title || 'Unknown'}</p>
+                        <p className="text-sm">The page may require JavaScript to load content, or has a different structure.</p>
+                        <p className="text-sm mt-2 text-yellow-300">Tip: Make sure you have ZENROWS_API_KEY configured for protected sites.</p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="font-medium">Processing {downloadPageResult.pdfs_found} PDFs in background!</p>
+                        <p className="text-sm mt-2 text-gray-300">PDFs found:</p>
+                        <ul className="text-sm mt-1 space-y-1 max-h-40 overflow-y-auto">
+                          {downloadPageResult.pdf_links?.slice(0, 10).map((pdf: any, i: number) => (
+                            <li key={i} className="truncate">• {pdf.title}</li>
+                          ))}
+                          {downloadPageResult.pdf_links?.length > 10 && (
+                            <li className="text-gray-400">...and {downloadPageResult.pdf_links.length - 10} more</li>
+                          )}
+                        </ul>
+                        <p className="text-sm text-gray-400 mt-2">Stats will update in ~10 seconds...</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Regular URL Scraper */}
             <div className="bg-gray-800 rounded-lg p-6">
-              <h2 className="text-xl font-semibold mb-4">Scrape Web Content</h2>
-              <p className="text-gray-400 mb-6">Scrape content from supplier websites and technical resources.</p>
+              <h2 className="text-xl font-semibold mb-4">Scrape Single Web Page</h2>
+              <p className="text-gray-400 mb-6">Scrape content directly from a web page (for regular HTML pages, not download areas).</p>
 
               <div className="space-y-4">
                 <div>
