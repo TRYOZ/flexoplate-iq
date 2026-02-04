@@ -56,7 +56,7 @@ const tools: Tool[] = [
     href: '/tools/bump-up',
     color: 'text-orange-600',
     bgColor: 'bg-orange-100',
-    available: false,
+    available: true,
   },
   {
     name: 'Washout Speed Calculator',
@@ -65,7 +65,7 @@ const tools: Tool[] = [
     href: '/tools/washout',
     color: 'text-cyan-600',
     bgColor: 'bg-cyan-100',
-    available: false,
+    available: true,
   },
   {
     name: 'Lamp Intensity Tracker',
@@ -74,7 +74,7 @@ const tools: Tool[] = [
     href: '/tools/lamp-tracker',
     color: 'text-yellow-600',
     bgColor: 'bg-yellow-100',
-    available: false,
+    available: true,
   },
 ];
 
