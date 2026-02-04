@@ -53,11 +53,124 @@ ACCESS_TOKEN_EXPIRE_DAYS = 30
 security = HTTPBearer(auto_error=False)
 pool: asyncpg.Pool = None
 
+async def init_knowledge_base_tables(conn):
+    """Create knowledge base tables if they don't exist"""
+    await conn.execute("""
+        -- Enable pgvector extension
+        CREATE EXTENSION IF NOT EXISTS vector;
+
+        -- Knowledge Documents Table
+        CREATE TABLE IF NOT EXISTS knowledge_documents (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            source_url TEXT,
+            source_type VARCHAR(50) NOT NULL,
+            source_name VARCHAR(255),
+            title VARCHAR(500),
+            content TEXT NOT NULL,
+            content_hash VARCHAR(64),
+            category VARCHAR(100),
+            subcategory VARCHAR(100),
+            tags TEXT[],
+            supplier_id UUID,
+            plate_family_id UUID,
+            language VARCHAR(10) DEFAULT 'en',
+            word_count INTEGER,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            last_scraped_at TIMESTAMPTZ,
+            is_active BOOLEAN DEFAULT TRUE,
+            quality_score FLOAT
+        );
+
+        -- Add unique constraint if not exists
+        DO $$ BEGIN
+            ALTER TABLE knowledge_documents ADD CONSTRAINT unique_content_hash UNIQUE (content_hash);
+        EXCEPTION WHEN duplicate_table THEN NULL;
+        WHEN duplicate_object THEN NULL;
+        END $$;
+
+        -- Knowledge Chunks Table (with vector embeddings)
+        CREATE TABLE IF NOT EXISTS knowledge_chunks (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            document_id UUID NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+            chunk_index INTEGER NOT NULL,
+            chunk_text TEXT NOT NULL,
+            chunk_tokens INTEGER,
+            embedding vector(1536),
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        -- Add unique constraint if not exists
+        DO $$ BEGIN
+            ALTER TABLE knowledge_chunks ADD CONSTRAINT unique_chunk_per_doc UNIQUE (document_id, chunk_index);
+        EXCEPTION WHEN duplicate_table THEN NULL;
+        WHEN duplicate_object THEN NULL;
+        END $$;
+
+        -- Scrape Sources Table
+        CREATE TABLE IF NOT EXISTS scrape_sources (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name VARCHAR(255) NOT NULL,
+            base_url TEXT NOT NULL,
+            url_patterns TEXT[],
+            scrape_frequency_hours INTEGER DEFAULT 168,
+            max_depth INTEGER DEFAULT 3,
+            respect_robots_txt BOOLEAN DEFAULT TRUE,
+            content_selector VARCHAR(255),
+            exclude_selectors TEXT[],
+            default_category VARCHAR(100),
+            supplier_id UUID,
+            is_active BOOLEAN DEFAULT TRUE,
+            last_scraped_at TIMESTAMPTZ,
+            last_error TEXT,
+            pages_scraped INTEGER DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+
+    # Create indexes separately (IF NOT EXISTS works for indexes)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_docs_category ON knowledge_documents(category);
+        CREATE INDEX IF NOT EXISTS idx_docs_source_type ON knowledge_documents(source_type);
+        CREATE INDEX IF NOT EXISTS idx_docs_active ON knowledge_documents(is_active);
+        CREATE INDEX IF NOT EXISTS idx_docs_content_hash ON knowledge_documents(content_hash);
+        CREATE INDEX IF NOT EXISTS idx_chunks_document ON knowledge_chunks(document_id);
+    """)
+
+    # Try to create vector index (may fail if not enough data, that's ok)
+    try:
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON knowledge_chunks
+            USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+        """)
+    except Exception:
+        pass  # Vector index needs data to build, will be created later
+
+    # Seed default scrape sources
+    await conn.execute("""
+        INSERT INTO scrape_sources (name, base_url, url_patterns, default_category, scrape_frequency_hours)
+        VALUES
+            ('XSYS Website', 'https://www.xsys.com', ARRAY['/products/', '/solutions/'], 'plates', 168),
+            ('DuPont Cyrel', 'https://www.dupont.com/brands/cyrel.html', ARRAY['/products/'], 'plates', 168),
+            ('Miraclon', 'https://www.miraclon.com', ARRAY['/products/', '/resources/'], 'plates', 168)
+        ON CONFLICT DO NOTHING;
+    """)
+
+    print("Knowledge base tables initialized successfully")
+
 @app.on_event("startup")
 async def startup():
     global pool
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
     intelligence_routes._pool = pool
+
+    # Initialize knowledge base tables
+    try:
+        async with pool.acquire() as conn:
+            await init_knowledge_base_tables(conn)
+    except Exception as e:
+        print(f"Warning: Could not initialize knowledge base tables: {e}")
 
 @app.on_event("shutdown")
 async def shutdown():
