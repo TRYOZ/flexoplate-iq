@@ -28,7 +28,7 @@ interface ScrapeSource {
 
 export default function KnowledgeAdminPage() {
   const [mounted, setMounted] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'upload' | 'manual' | 'scrape' | 'seed'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'upload' | 'manual' | 'scrape' | 'import' | 'seed'>('overview');
 
   // Stats
   const [stats, setStats] = useState<KnowledgeStats | null>(null);
@@ -63,6 +63,13 @@ export default function KnowledgeAdminPage() {
   const [downloadPageSupplier, setDownloadPageSupplier] = useState('');
   const [downloadPageScraping, setDownloadPageScraping] = useState(false);
   const [downloadPageResult, setDownloadPageResult] = useState<any>(null);
+
+  // Plate Import state (smart PDF to database)
+  const [importUrl, setImportUrl] = useState('');
+  const [importSupplier, setImportSupplier] = useState('');
+  const [importAutoCreate, setImportAutoCreate] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<any>(null);
 
   // Seed state
   const [seedOptions, setSeedOptions] = useState({
@@ -250,6 +257,44 @@ export default function KnowledgeAdminPage() {
     }
   };
 
+  const handlePlateImport = async () => {
+    if (!importUrl || !importSupplier) return;
+
+    setImporting(true);
+    setImportResult(null);
+
+    try {
+      // Determine if it's a download page (has multiple PDFs) or single PDF
+      const isPdfUrl = importUrl.toLowerCase().endsWith('.pdf');
+
+      const endpoint = isPdfUrl
+        ? `${API_BASE}/api/plates/import/from-pdf`
+        : `${API_BASE}/api/plates/import/from-download-page`;
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: importUrl,
+          supplier_name: importSupplier,
+          auto_create_plates: importAutoCreate,
+          max_pdfs: 20
+        })
+      });
+
+      const result = await res.json();
+      setImportResult(result);
+
+      if (res.ok && (result.status === 'started' || result.status === 'success')) {
+        setTimeout(() => loadStats(), 15000);
+      }
+    } catch (err) {
+      setImportResult({ error: 'Import failed' });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const handleSeed = async () => {
     setSeeding(true);
     setSeedResult(null);
@@ -313,17 +358,17 @@ export default function KnowledgeAdminPage() {
 
         {/* Tabs */}
         <div className="flex gap-2 mb-6 flex-wrap">
-          {(['overview', 'upload', 'manual', 'scrape', 'seed'] as const).map(tab => (
+          {(['overview', 'upload', 'manual', 'scrape', 'import', 'seed'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={`px-4 py-2 rounded-lg font-medium transition ${
                 activeTab === tab
-                  ? 'bg-cyan-600 text-white'
+                  ? tab === 'import' ? 'bg-orange-600 text-white' : 'bg-cyan-600 text-white'
                   : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
               }`}
             >
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tab === 'import' ? 'Plate Import' : tab.charAt(0).toUpperCase() + tab.slice(1)}
             </button>
           ))}
         </div>
@@ -729,6 +774,146 @@ export default function KnowledgeAdminPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Plate Import Tab - Smart PDF to Database */}
+        {activeTab === 'import' && (
+          <div className="space-y-6">
+            <div className="bg-gradient-to-r from-orange-900/50 to-amber-900/50 border border-orange-600 rounded-lg p-6">
+              <h2 className="text-xl font-semibold mb-2 text-orange-300">Smart Plate Data Import</h2>
+              <p className="text-gray-400 mb-2">
+                Import plate specifications from supplier PDF data sheets directly into the plate database.
+              </p>
+              <p className="text-gray-500 text-sm mb-6">
+                Uses AI to extract plate specs (thickness, hardness, exposure times, etc.), matches to existing plates,
+                and suggests equivalencies with other suppliers.
+              </p>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Download Page or PDF URL</label>
+                  <input
+                    type="url"
+                    value={importUrl}
+                    onChange={e => setImportUrl(e.target.value)}
+                    placeholder="https://xsysglobal.com/download-area/ or direct .pdf URL"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Enter a download page URL (finds all PDFs) or a direct PDF link
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">Supplier Name (required)</label>
+                  <input
+                    type="text"
+                    value={importSupplier}
+                    onChange={e => setImportSupplier(e.target.value)}
+                    placeholder="e.g., XSYS, DuPont, Miraclon, Asahi"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white"
+                  />
+                </div>
+
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={importAutoCreate}
+                    onChange={e => setImportAutoCreate(e.target.checked)}
+                    className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-orange-600 focus:ring-orange-500"
+                  />
+                  <div>
+                    <div className="font-medium">Auto-create new plates</div>
+                    <div className="text-sm text-gray-400">
+                      If no matching plate found, create a new one. Otherwise only updates existing plates.
+                    </div>
+                  </div>
+                </label>
+
+                <button
+                  onClick={handlePlateImport}
+                  disabled={!importUrl || !importSupplier || importing}
+                  className="w-full py-3 bg-orange-600 hover:bg-orange-700 rounded-lg font-medium disabled:opacity-50"
+                >
+                  {importing ? 'Analyzing PDFs...' : 'Import Plate Data'}
+                </button>
+
+                {importResult && (
+                  <div className={`p-4 rounded-lg ${
+                    importResult.error ? 'bg-red-900/50 text-red-300' :
+                    importResult.status === 'no_plates_found' || importResult.status === 'no_pdfs_found' ? 'bg-yellow-900/50 text-yellow-300' :
+                    'bg-green-900/50 text-green-300'
+                  }`}>
+                    {importResult.error ? (
+                      <p>Error: {importResult.error || importResult.detail}</p>
+                    ) : importResult.status === 'no_pdfs_found' ? (
+                      <div>
+                        <p className="font-medium">No PDFs found on page</p>
+                        <p className="text-sm mt-1">Make sure ZENROWS_API_KEY is configured for protected sites.</p>
+                      </div>
+                    ) : importResult.status === 'no_plates_found' ? (
+                      <div>
+                        <p className="font-medium">Could not extract plate info from PDF</p>
+                        <p className="text-sm mt-1">Preview: {importResult.text_preview?.substring(0, 200)}...</p>
+                      </div>
+                    ) : importResult.status === 'started' ? (
+                      <div>
+                        <p className="font-medium">Processing {importResult.pdfs_found} PDFs in background</p>
+                        <ul className="text-sm mt-2 space-y-1 max-h-40 overflow-y-auto">
+                          {importResult.pdf_links?.slice(0, 8).map((pdf: any, i: number) => (
+                            <li key={i} className="truncate">• {pdf.title}</li>
+                          ))}
+                          {importResult.pdf_links?.length > 8 && (
+                            <li className="text-gray-400">...and {importResult.pdf_links.length - 8} more</li>
+                          )}
+                        </ul>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="font-medium">Processed {importResult.plates_extracted} plate(s)</p>
+                        {importResult.results?.map((result: any, i: number) => (
+                          <div key={i} className="mt-3 p-2 bg-black/20 rounded">
+                            <div className="font-medium">{result.extracted?.name || result.plate_name || 'Unknown plate'}</div>
+                            <div className="text-sm">
+                              Status: <span className={result.status === 'created' ? 'text-green-400' : result.status === 'updated' ? 'text-blue-400' : 'text-yellow-400'}>
+                                {result.status}
+                              </span>
+                              {result.updated_fields?.length > 0 && (
+                                <span className="ml-2">- Updated: {result.updated_fields.join(', ')}</span>
+                              )}
+                            </div>
+                            {result.equivalency_suggestions?.length > 0 && (
+                              <div className="text-sm mt-1">
+                                <span className="text-gray-400">Equivalent plates:</span>
+                                <ul className="ml-4">
+                                  {result.equivalency_suggestions.slice(0, 3).map((eq: any, j: number) => (
+                                    <li key={j}>{eq.display_name} ({eq.supplier}) - {eq.similarity_score}% match</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Info box */}
+            <div className="bg-gray-800 rounded-lg p-4">
+              <h3 className="font-semibold mb-2">How it works</h3>
+              <ol className="text-sm text-gray-400 space-y-1 list-decimal list-inside">
+                <li>Enter a supplier download page or direct PDF URL</li>
+                <li>AI extracts plate specifications (thickness, hardness, exposure times, etc.)</li>
+                <li>System matches to existing plates in your database by name/thickness</li>
+                <li>Updates plate records with extracted specifications</li>
+                <li>Links PDF as data sheet to the plate record</li>
+                <li>Suggests equivalent plates from other suppliers</li>
+              </ol>
+            </div>
           </div>
         )}
 
