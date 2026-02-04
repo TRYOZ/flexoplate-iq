@@ -288,6 +288,28 @@ ASSISTANT_TOOLS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_knowledge",
+            "description": "Search the FlexoBrain knowledge base for technical information about flexographic printing. Use this for general questions about processes, troubleshooting, best practices, and technical concepts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query - describe what information you're looking for"
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["plates", "processing", "equipment", "troubleshooting", "best_practices", "general"],
+                        "description": "Category to filter results (optional)"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
     }
 ]
 
@@ -346,6 +368,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         result = await tool_calculate_exposure(pool, arguments)
     elif tool_name == "get_equipment_info":
         result = await tool_get_equipment_info(pool, arguments)
+    elif tool_name == "search_knowledge":
+        result = await tool_search_knowledge(pool, arguments)
     else:
         result = {"error": f"Unknown tool: {tool_name}"}
 
@@ -701,6 +725,94 @@ async def tool_get_equipment_info(pool, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"equipment": equipment, "count": len(equipment)}
     except Exception as e:
         return {"error": str(e)}
+
+
+async def tool_search_knowledge(pool, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Search the knowledge base using semantic similarity"""
+    if not pool:
+        return {"error": "Database not available", "results": []}
+
+    query = args.get("query", "")
+    category = args.get("category")
+
+    if not query:
+        return {"error": "Query is required", "results": []}
+
+    try:
+        # Generate embedding for the query
+        client = get_openai_client()
+        response = await client.embeddings.create(
+            model="text-embedding-3-small",
+            input=query,
+            dimensions=1536
+        )
+        query_embedding = response.data[0].embedding
+
+        # Search with vector similarity
+        async with pool.acquire() as conn:
+            if category:
+                results = await conn.fetch("""
+                    SELECT
+                        kc.chunk_text,
+                        kd.title,
+                        kd.category,
+                        kd.source_url,
+                        1 - (kc.embedding <=> $1::vector) as similarity
+                    FROM knowledge_chunks kc
+                    JOIN knowledge_documents kd ON kc.document_id = kd.id
+                    WHERE kd.is_active = TRUE
+                      AND kd.category = $2
+                      AND 1 - (kc.embedding <=> $1::vector) > 0.6
+                    ORDER BY kc.embedding <=> $1::vector
+                    LIMIT 5
+                """, json.dumps(query_embedding), category)
+            else:
+                results = await conn.fetch("""
+                    SELECT
+                        kc.chunk_text,
+                        kd.title,
+                        kd.category,
+                        kd.source_url,
+                        1 - (kc.embedding <=> $1::vector) as similarity
+                    FROM knowledge_chunks kc
+                    JOIN knowledge_documents kd ON kc.document_id = kd.id
+                    WHERE kd.is_active = TRUE
+                      AND 1 - (kc.embedding <=> $1::vector) > 0.6
+                    ORDER BY kc.embedding <=> $1::vector
+                    LIMIT 5
+                """, json.dumps(query_embedding))
+
+            if not results:
+                return {
+                    "query": query,
+                    "results": [],
+                    "message": "No relevant knowledge found. Using built-in expertise."
+                }
+
+            knowledge_results = []
+            for row in results:
+                knowledge_results.append({
+                    "content": row["chunk_text"],
+                    "title": row["title"],
+                    "category": row["category"],
+                    "source": row["source_url"],
+                    "relevance": round(float(row["similarity"]), 3)
+                })
+
+            return {
+                "query": query,
+                "results": knowledge_results,
+                "count": len(knowledge_results)
+            }
+
+    except Exception as e:
+        # If knowledge search fails, return empty - agent can fall back to built-in knowledge
+        return {
+            "query": query,
+            "results": [],
+            "error": str(e),
+            "message": "Knowledge search unavailable. Using built-in expertise."
+        }
 
 
 # ============================================================================
