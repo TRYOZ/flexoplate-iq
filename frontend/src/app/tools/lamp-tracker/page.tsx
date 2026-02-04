@@ -402,58 +402,84 @@ export default function LampTrackerPage() {
                 <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                   <h2 className="text-lg font-semibold text-gray-900 mb-4">Degradation Curve</h2>
 
-                  <div className="h-64 relative bg-gray-50 rounded-lg p-4">
-                    {/* Grid */}
-                    <div className="absolute inset-4 grid grid-cols-10 grid-rows-5">
-                      {[...Array(50)].map((_, i) => (
-                        <div key={i} className="border-l border-t border-gray-200" />
-                      ))}
+                  <div className="h-64 relative bg-gray-50 rounded-lg overflow-hidden">
+                    {/* Chart container with padding */}
+                    <div className="absolute inset-0 pl-8 pr-4 pt-4 pb-6">
+                      {/* Grid */}
+                      <div className="absolute inset-0 grid grid-cols-10 grid-rows-5">
+                        {[...Array(50)].map((_, i) => (
+                          <div key={i} className="border-l border-t border-gray-200" />
+                        ))}
+                      </div>
+
+                      <svg
+                        className="absolute inset-0 overflow-hidden"
+                        viewBox="0 0 100 100"
+                        preserveAspectRatio="none"
+                        style={{ overflow: 'hidden' }}
+                      >
+                        <defs>
+                          <clipPath id="chartClip">
+                            <rect x="0" y="0" width="100" height="100" />
+                          </clipPath>
+                        </defs>
+
+                        <g clipPath="url(#chartClip)">
+                          {/* Target intensity line */}
+                          <line
+                            x1="0"
+                            y1={100 - (currentLamp.targetIntensity / currentLamp.initialIntensity) * 100}
+                            x2="100"
+                            y2={100 - (currentLamp.targetIntensity / currentLamp.initialIntensity) * 100}
+                            stroke="#ef4444"
+                            strokeWidth="0.5"
+                            strokeDasharray="2,2"
+                          />
+
+                          {/* Predicted curve - clamp values to chart bounds */}
+                          <polyline
+                            fill="none"
+                            stroke="#eab308"
+                            strokeWidth="1.5"
+                            points={lampAnalysis.predictions
+                              .map(p => {
+                                const x = (p.hours / currentLamp.maxHours) * 100;
+                                const y = Math.max(0, Math.min(100, 100 - (p.intensity / currentLamp.initialIntensity) * 100));
+                                return `${x},${y}`;
+                              })
+                              .join(' ')}
+                          />
+
+                          {/* Actual readings */}
+                          {currentLamp.readings.map((reading, i) => {
+                            const x = (reading.hours / currentLamp.maxHours) * 100;
+                            const y = Math.max(0, Math.min(100, 100 - (reading.intensity / currentLamp.initialIntensity) * 100));
+                            return (
+                              <circle
+                                key={i}
+                                cx={x}
+                                cy={y}
+                                r="2"
+                                fill="#3b82f6"
+                              />
+                            );
+                          })}
+                        </g>
+                      </svg>
                     </div>
 
-                    <svg className="absolute inset-4" viewBox="0 0 100 100" preserveAspectRatio="none">
-                      {/* Target intensity line */}
-                      <line
-                        x1="0"
-                        y1={100 - (currentLamp.targetIntensity / currentLamp.initialIntensity) * 100}
-                        x2="100"
-                        y2={100 - (currentLamp.targetIntensity / currentLamp.initialIntensity) * 100}
-                        stroke="#ef4444"
-                        strokeWidth="0.5"
-                        strokeDasharray="2,2"
-                      />
-
-                      {/* Predicted curve */}
-                      <polyline
-                        fill="none"
-                        stroke="#eab308"
-                        strokeWidth="1.5"
-                        points={lampAnalysis.predictions
-                          .map(p => `${(p.hours / currentLamp.maxHours) * 100},${100 - (p.intensity / currentLamp.initialIntensity) * 100}`)
-                          .join(' ')}
-                      />
-
-                      {/* Actual readings */}
-                      {currentLamp.readings.map((reading, i) => (
-                        <circle
-                          key={i}
-                          cx={(reading.hours / currentLamp.maxHours) * 100}
-                          cy={100 - (reading.intensity / currentLamp.initialIntensity) * 100}
-                          r="2"
-                          fill="#3b82f6"
-                        />
-                      ))}
-                    </svg>
-
-                    {/* Axis labels */}
-                    <div className="absolute bottom-0 left-4 right-4 flex justify-between text-xs text-gray-500">
-                      <span>0h</span>
-                      <span>{Math.round(currentLamp.maxHours / 2)}h</span>
-                      <span>{currentLamp.maxHours}h</span>
-                    </div>
-                    <div className="absolute left-0 top-4 bottom-4 flex flex-col justify-between text-xs text-gray-500">
+                    {/* Y Axis labels */}
+                    <div className="absolute left-1 top-4 bottom-6 flex flex-col justify-between text-xs text-gray-500 w-6 text-right">
                       <span>{currentLamp.initialIntensity}</span>
                       <span>{Math.round(currentLamp.initialIntensity / 2)}</span>
                       <span>0</span>
+                    </div>
+
+                    {/* X Axis labels */}
+                    <div className="absolute bottom-1 left-8 right-4 flex justify-between text-xs text-gray-500">
+                      <span>0h</span>
+                      <span>{Math.round(currentLamp.maxHours / 2)}h</span>
+                      <span>{currentLamp.maxHours}h</span>
                     </div>
                   </div>
 
@@ -478,10 +504,12 @@ export default function LampTrackerPage() {
                   <div className="flex items-center justify-between mb-4">
                     <h2 className="text-lg font-semibold text-gray-900">Intensity Readings</h2>
                     <button
+                      type="button"
                       onClick={() => {
                         const lastReading = currentLamp.readings[currentLamp.readings.length - 1];
-                        setNewReadingIntensity(lastReading?.intensity || currentLamp.initialIntensity);
-                        setNewReadingHours(lastReading ? lastReading.hours + 100 : 0);
+                        setNewReadingIntensity(lastReading?.intensity ? lastReading.intensity - 1 : currentLamp.initialIntensity * 0.95);
+                        setNewReadingHours(lastReading ? lastReading.hours + 100 : 100);
+                        setNewReadingDate(new Date().toISOString().split('T')[0]);
                         setShowAddReading(true);
                       }}
                       className="inline-flex items-center px-3 py-1.5 text-sm bg-yellow-500 text-white rounded-lg hover:bg-yellow-600"
@@ -701,12 +729,14 @@ export default function LampTrackerPage() {
 
               <div className="flex justify-end gap-3 mt-6">
                 <button
+                  type="button"
                   onClick={() => setShowAddReading(false)}
                   className="px-4 py-2 text-gray-600 hover:text-gray-900"
                 >
                   Cancel
                 </button>
                 <button
+                  type="button"
                   onClick={handleAddReading}
                   className="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600"
                 >
