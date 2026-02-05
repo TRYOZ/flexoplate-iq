@@ -277,27 +277,27 @@ async def fetch_all_feeds() -> List[NewsItem]:
         # Calculate relevance
         relevance = calculate_relevance(item["title"], item["description"])
 
-        # Only include items with some relevance to flexo/printing
-        if relevance >= 0.05:
-            # Generate stable ID
-            item_id = hashlib.md5(item["url"].encode()).hexdigest()[:12]
+        # Include all items from industry sources - they're already relevant by source
+        # Use relevance score for sorting/ranking, not filtering
+        # Generate stable ID
+        item_id = hashlib.md5(item["url"].encode()).hexdigest()[:12]
 
-            # Parse date
-            parsed_date = parse_rss_date(item["published_date"])
-            date_str = parsed_date.isoformat() if parsed_date else None
+        # Parse date
+        parsed_date = parse_rss_date(item["published_date"])
+        date_str = parsed_date.isoformat() if parsed_date else None
 
-            news_items.append(NewsItem(
-                id=item_id,
-                title=item["title"],
-                description=item["description"],
-                url=item["url"],
-                source=item["source"],
-                source_url=item.get("source_url"),
-                category=item["category"],
-                published_date=date_str,
-                image_url=item.get("image_url"),
-                relevance_score=relevance
-            ))
+        news_items.append(NewsItem(
+            id=item_id,
+            title=item["title"],
+            description=item["description"],
+            url=item["url"],
+            source=item["source"],
+            source_url=item.get("source_url"),
+            category=item["category"],
+            published_date=date_str,
+            image_url=item.get("image_url"),
+            relevance_score=relevance
+        ))
 
     # Sort by relevance first, then by date
     news_items.sort(key=lambda x: (x.relevance_score, x.published_date or ""), reverse=True)
