@@ -12,13 +12,12 @@ import {
   Layers,
   Lightbulb,
   Settings,
-  LineChart,
-  MessageSquare,
   ChevronRight,
   Star,
   Clock,
   AlertTriangle,
 } from 'lucide-react';
+import FlexoBrainChat from '@/components/FlexoBrainChat';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
 
@@ -135,14 +134,6 @@ const TRACK_TOOLS = [
     color: 'text-gray-600',
     bgColor: 'bg-gray-100',
   },
-  {
-    name: 'TVI / Fingerprint',
-    description: 'Visualize tone curves',
-    href: '/tools/fingerprint',
-    icon: LineChart,
-    color: 'text-pink-600',
-    bgColor: 'bg-pink-100',
-  },
 ];
 
 export default function DashboardPage() {
@@ -235,21 +226,12 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-6xl mx-auto px-4 py-8">
-        {/* Header with FlexoBrain */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">
-              Welcome back{user.first_name ? `, ${user.first_name}` : ''}!
-            </h1>
-            <p className="text-gray-600 mt-1">Your FlexoPlate IQ Dashboard</p>
-          </div>
-          <Link
-            href="/chat"
-            className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all shadow-sm"
-          >
-            <MessageSquare className="w-5 h-5" />
-            <span className="font-medium">FlexoBrain</span>
-          </Link>
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-2xl font-bold text-gray-900">
+            Welcome back{user.first_name ? `, ${user.first_name}` : ''}!
+          </h1>
+          <p className="text-gray-600 mt-1">Your FlexoPlate IQ Dashboard</p>
         </div>
 
         {/* Equipment Warning Banner */}
@@ -425,6 +407,9 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* FlexoBrain Chat Widget */}
+      <FlexoBrainChat context={{ page: 'dashboard' }} />
     </div>
   );
 }

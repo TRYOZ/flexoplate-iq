@@ -4,7 +4,6 @@ import Link from 'next/link';
 import {
   Calculator,
   GitCompare,
-  LineChart,
   TrendingUp,
   Droplets,
   Lightbulb,
@@ -38,15 +37,6 @@ const tools: Tool[] = [
     href: '/tools/comparison',
     color: 'text-green-600',
     bgColor: 'bg-green-100',
-    available: true,
-  },
-  {
-    name: 'TVI / Fingerprint',
-    description: 'Visualize tone value increase curves and fingerprint data for your plates',
-    icon: <LineChart className="w-8 h-8" />,
-    href: '/tools/fingerprint',
-    color: 'text-purple-600',
-    bgColor: 'bg-purple-100',
     available: true,
   },
   {
