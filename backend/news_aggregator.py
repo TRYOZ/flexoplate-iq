@@ -1,161 +1,219 @@
-# News Aggregator for FlexoPlate IQ
-# ==================================
-# Aggregates news from flexographic and printing industry sources
+# News Aggregator for FlexoPlate IQ - Zenrows Edition
+# ====================================================
+# Uses Zenrows API for reliable OpenGraph image extraction
 
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from typing import Optional, List
+from pydantic import BaseModel
 from datetime import datetime, timedelta
 import httpx
-import xml.etree.ElementTree as ET
-import re
-import hashlib
 import asyncio
+import hashlib
+import re
+import os
 
 router = APIRouter(prefix="/api/news", tags=["news"])
 
-# In-memory cache for news items
-_news_cache: dict = {
-    "items": [],
-    "last_fetch": None,
-    "cache_duration_minutes": 30
-}
+# Zenrows configuration
+ZENROWS_API_KEY = os.getenv("ZENROWS_API_KEY", "")
+ZENROWS_BASE_URL = "https://api.zenrows.com/v1/"
 
-# RSS feed sources for flexographic and printing industry
-# Using Google News RSS as primary reliable source, plus verified industry feeds
+# Database pool will be set from main.py
+_pool = None
+
+def set_pool(pool):
+    global _pool
+    _pool = pool
+
+async def get_pool():
+    global _pool
+    if _pool is None:
+        raise HTTPException(status_code=500, detail="Database pool not initialized")
+    return _pool
+
+# =============================================================================
+# RSS Feed Sources - For URL Discovery Only
+# =============================================================================
 RSS_FEEDS = [
-    # Google News searches - these reliably return results
-    {
-        "name": "Flexographic News",
-        "url": "https://news.google.com/rss/search?q=flexographic+printing&hl=en-US&gl=US&ceid=US:en",
-        "category": "industry",
-        "logo": None
-    },
-    {
-        "name": "Packaging Industry",
-        "url": "https://news.google.com/rss/search?q=packaging+industry+news&hl=en-US&gl=US&ceid=US:en",
-        "category": "packaging",
-        "logo": None
-    },
-    {
-        "name": "Label Printing",
-        "url": "https://news.google.com/rss/search?q=label+printing+narrow+web&hl=en-US&gl=US&ceid=US:en",
-        "category": "labels",
-        "logo": None
-    },
-    {
-        "name": "Corrugated Packaging",
-        "url": "https://news.google.com/rss/search?q=corrugated+packaging+boxes&hl=en-US&gl=US&ceid=US:en",
-        "category": "packaging",
-        "logo": None
-    },
-    {
-        "name": "Print Technology",
-        "url": "https://news.google.com/rss/search?q=printing+technology+press&hl=en-US&gl=US&ceid=US:en",
-        "category": "industry",
-        "logo": None
-    },
-    {
-        "name": "Flexible Packaging",
-        "url": "https://news.google.com/rss/search?q=flexible+packaging+film&hl=en-US&gl=US&ceid=US:en",
-        "category": "converting",
-        "logo": None
-    },
-    # Direct industry publication feeds (WordPress-based, more reliable)
-    {
-        "name": "WhatTheyThink",
-        "url": "https://whattheythink.com/feed/",
-        "category": "industry",
-        "logo": None
-    },
-    {
-        "name": "Printing Impressions",
-        "url": "https://www.piworld.com/feed/",
-        "category": "industry",
-        "logo": None
-    },
-    {
-        "name": "Package Printing",
-        "url": "https://www.packageprinting.com/feed/",
-        "category": "packaging",
-        "logo": None
-    },
-    {
-        "name": "Labels & Labeling",
-        "url": "https://www.labelsandlabeling.com/feed",
-        "category": "labels",
-        "logo": None
-    },
-    {
-        "name": "Packaging World",
-        "url": "https://www.packworld.com/rss",
-        "category": "packaging",
-        "logo": None
-    },
-    {
-        "name": "Flexible Packaging Magazine",
-        "url": "https://www.flexpackmag.com/rss",
-        "category": "converting",
-        "logo": None
-    },
-    {
-        "name": "PFFC Online",
-        "url": "https://www.pffc-online.com/rss.xml",
-        "category": "converting",
-        "logo": None
-    },
-    {
-        "name": "Converting Quarterly",
-        "url": "https://www.convertingquarterly.com/feed/",
-        "category": "converting",
-        "logo": None
-    },
-    {
-        "name": "Ink World Magazine",
-        "url": "https://www.inkworldmagazine.com/feed/",
-        "category": "industry",
-        "logo": None
-    }
+    # North America
+    {"name": "Packaging World", "url": "https://www.packworld.com/rss.xml", "category": "Packaging", "region": "North America"},
+    {"name": "Packaging Digest", "url": "https://www.packagingdigest.com/rss.xml", "category": "Packaging", "region": "North America"},
+    {"name": "Flexible Packaging", "url": "https://www.flexpackmag.com/rss", "category": "Flexo", "region": "North America"},
+    {"name": "PFFC", "url": "https://www.pffc-online.com/rss.xml", "category": "Converting", "region": "North America"},
+    {"name": "Converting Quarterly", "url": "https://www.convertingquarterly.com/feed/", "category": "Converting", "region": "North America"},
+    {"name": "Ink World", "url": "https://www.inkworldmagazine.com/rss.xml", "category": "Inks", "region": "North America"},
+    {"name": "Label & Narrow Web", "url": "https://www.labelandnarrowweb.com/rss.xml", "category": "Labels", "region": "North America"},
+    {"name": "Printing Impressions", "url": "https://www.piworld.com/feed/", "category": "Print", "region": "North America"},
+
+    # EMEA - UK
+    {"name": "PrintWeek UK", "url": "https://www.printweek.com/rss", "category": "Print", "region": "EMEA"},
+    {"name": "FlexoTech", "url": "https://www.flexotechmag.com/feed/", "category": "Flexo", "region": "EMEA"},
+    {"name": "Packaging Europe", "url": "https://packagingeurope.com/feed/", "category": "Packaging", "region": "EMEA"},
+    {"name": "Labels & Labeling", "url": "https://www.labelsandlabeling.com/rss.xml", "category": "Labels", "region": "EMEA"},
+
+    # EMEA - Germany
+    {"name": "Flexo+Tief-Druck", "url": "https://www.flexotiefdruck.de/feed/", "category": "Flexo", "region": "EMEA"},
+    {"name": "Verpackungs-Rundschau", "url": "https://www.verpackungsrundschau.de/feed/", "category": "Packaging", "region": "EMEA"},
+
+    # EMEA - France
+    {"name": "Emballages Magazine", "url": "https://www.emballagesmagazine.com/rss.xml", "category": "Packaging", "region": "EMEA"},
+
+    # EMEA - Italy
+    {"name": "ItaliaImballaggio", "url": "https://www.italiaimballaggio.it/feed/", "category": "Packaging", "region": "EMEA"},
+    {"name": "Converter Flessibili", "url": "https://www.converter.it/feed/", "category": "Flexo", "region": "EMEA"},
+
+    # EMEA - Spain
+    {"name": "Infopack", "url": "https://www.infopack.es/feed/", "category": "Packaging", "region": "EMEA"},
+
+    # LATAM
+    {"name": "El Empaque", "url": "https://www.elempaque.com/feed/", "category": "Packaging", "region": "LATAM"},
+
+    # APAC
+    {"name": "Packaging South Asia", "url": "https://www.packagingsouthasia.com/feed/", "category": "Packaging", "region": "APAC"},
+    {"name": "PKN Packaging News", "url": "https://www.packagingnews.com.au/feed/", "category": "Packaging", "region": "APAC"},
+
+    # Google News (Fallback for broader coverage)
+    {"name": "Flexo News", "url": "https://news.google.com/rss/search?q=flexographic+printing&hl=en-US&gl=US&ceid=US:en", "category": "Flexo", "region": "Global"},
+    {"name": "Packaging News", "url": "https://news.google.com/rss/search?q=packaging+industry&hl=en-US&gl=US&ceid=US:en", "category": "Packaging", "region": "Global"},
 ]
 
-# Keywords to filter for flexo-relevant content
-FLEXO_KEYWORDS = [
-    'flexo', 'flexographic', 'flexography',
-    'photopolymer', 'plate', 'plates',
-    'anilox', 'pre-press', 'prepress',
-    'corrugated', 'label', 'labels', 'packaging',
-    'uv', 'led', 'exposure', 'imaging',
-    'narrow web', 'wide web',
-    'dupont', 'cyrel', 'miraclon', 'flexcel',
-    'xsys', 'nyloflex', 'asahi', 'flint',
-    'esko', 'kodak', 'agfa',
-    'color management', 'dot gain', 'tvi',
-    'ink', 'inks', 'solvent', 'water-based', 'water based',
-    'press', 'printing press', 'converter',
-    'substrate', 'film', 'paper',
-    'drupa', 'labelexpo', 'fta'
-]
-
-
-class NewsItem(BaseModel):
+# =============================================================================
+# Models
+# =============================================================================
+class NewsArticle(BaseModel):
     id: str
     title: str
-    description: str
+    summary: Optional[str]
     url: str
-    source: str
-    source_url: Optional[str] = None
+    image_url: Optional[str]
+    source_name: str
     category: str
-    published_date: Optional[str] = None
-    image_url: Optional[str] = None
-    relevance_score: float = 0.0
-
+    region: str
+    published_at: Optional[datetime]
 
 class NewsResponse(BaseModel):
-    items: List[NewsItem]
+    articles: List[NewsArticle]
     total: int
-    sources_checked: int
-    last_updated: Optional[str] = None
+    has_more: bool
 
+# =============================================================================
+# Database Initialization
+# =============================================================================
+async def init_news_table(conn):
+    """Create news_articles table if it doesn't exist"""
+    await conn.execute("""
+        -- News articles table with OpenGraph data
+        CREATE TABLE IF NOT EXISTS news_articles (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            external_id VARCHAR(64) UNIQUE NOT NULL,
+            title VARCHAR(500) NOT NULL,
+            summary TEXT,
+            url VARCHAR(1000) NOT NULL,
+            image_url VARCHAR(1000),
+            source_name VARCHAR(100) NOT NULL,
+            source_url VARCHAR(500),
+            category VARCHAR(50) NOT NULL,
+            region VARCHAR(50) DEFAULT 'Global',
+            language VARCHAR(10) DEFAULT 'en',
+            published_at TIMESTAMP WITH TIME ZONE,
+            fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            og_title VARCHAR(500),
+            og_description TEXT,
+            og_image VARCHAR(1000),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+    """)
+
+    # Create indexes
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_news_articles_published ON news_articles(published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_news_articles_category ON news_articles(category);
+        CREATE INDEX IF NOT EXISTS idx_news_articles_region ON news_articles(region);
+        CREATE INDEX IF NOT EXISTS idx_news_articles_source ON news_articles(source_name);
+        CREATE INDEX IF NOT EXISTS idx_news_articles_created ON news_articles(created_at DESC);
+    """)
+
+    print("[News] Database table initialized")
+
+# =============================================================================
+# Zenrows Scraping Functions
+# =============================================================================
+async def fetch_with_zenrows(url: str) -> Optional[str]:
+    """Fetch a URL using Zenrows API."""
+    if not ZENROWS_API_KEY:
+        print("[News] Warning: ZENROWS_API_KEY not set, skipping OG fetch")
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                ZENROWS_BASE_URL,
+                params={
+                    "apikey": ZENROWS_API_KEY,
+                    "url": url,
+                    "js_render": "false",
+                    "premium_proxy": "true",
+                }
+            )
+
+            if response.status_code == 200:
+                return response.text
+            else:
+                print(f"[News] Zenrows error for {url[:50]}: HTTP {response.status_code}")
+                return None
+    except Exception as e:
+        print(f"[News] Zenrows fetch error for {url[:50]}: {e}")
+        return None
+
+def extract_opengraph(html: str, fallback_title: str = "", fallback_summary: str = "") -> dict:
+    """Extract OpenGraph meta tags from HTML."""
+    og_data = {
+        "title": fallback_title,
+        "description": fallback_summary,
+        "image": None
+    }
+
+    # Try OpenGraph tags with regex (no BeautifulSoup dependency)
+    og_patterns = {
+        "title": [
+            r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']',
+        ],
+        "description": [
+            r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:description["\']',
+        ],
+        "image": [
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+            r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
+        ]
+    }
+
+    for field, patterns in og_patterns.items():
+        for pattern in patterns:
+            match = re.search(pattern, html, re.IGNORECASE)
+            if match:
+                value = match.group(1)
+                if value and not value.startswith('data:'):
+                    if field == "description":
+                        og_data[field] = value[:500]
+                    else:
+                        og_data[field] = value
+                    break
+
+    # If no image found, try to find first large image
+    if not og_data["image"]:
+        img_pattern = r'<img[^>]+src=["\']([^"\']+)["\']'
+        for match in re.finditer(img_pattern, html, re.IGNORECASE):
+            src = match.group(1)
+            if src and not any(x in src.lower() for x in ["logo", "icon", "avatar", "button", "ad", "pixel", "1x1"]):
+                if any(ext in src.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp', '.gif']):
+                    og_data["image"] = src
+                    break
+
+    return og_data
 
 def clean_html(text: str) -> str:
     """Remove HTML tags from text"""
@@ -163,561 +221,334 @@ def clean_html(text: str) -> str:
         return ""
     clean = re.sub(r'<[^>]+>', '', text)
     clean = re.sub(r'\s+', ' ', clean).strip()
-    # Decode common HTML entities
     clean = clean.replace('&amp;', '&')
     clean = clean.replace('&lt;', '<')
     clean = clean.replace('&gt;', '>')
     clean = clean.replace('&quot;', '"')
     clean = clean.replace('&#39;', "'")
     clean = clean.replace('&nbsp;', ' ')
-    return clean[:500]  # Limit description length
+    return clean[:500]
 
+async def parse_rss_feed(feed_info: dict) -> List[dict]:
+    """Parse RSS feed to get article URLs and basic info."""
+    import xml.etree.ElementTree as ET
 
-def extract_image_from_html(html_content: str) -> Optional[str]:
-    """Extract image URL from HTML content (description field often contains images)"""
-    if not html_content:
-        return None
-
-    # First, decode HTML entities (Google News often has &lt;img&gt; instead of <img>)
-    decoded = html_content
-    decoded = decoded.replace('&lt;', '<')
-    decoded = decoded.replace('&gt;', '>')
-    decoded = decoded.replace('&quot;', '"')
-    decoded = decoded.replace('&amp;', '&')
-    decoded = decoded.replace('&#39;', "'")
-
-    # Try to find img tags with various patterns
-    img_patterns = [
-        r'<img[^>]+src=["\']([^"\']+)["\']',
-        r'<img[^>]+src=([^\s>]+)',
-        r'src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp))["\']',
-        r'(https?://[^\s"\'<>]+\.(?:jpg|jpeg|png|gif|webp))',
-        r'<media:thumbnail[^>]+url=["\']([^"\']+)["\']',
-        r'<enclosure[^>]+url=["\']([^"\']+)["\'][^>]+type=["\']image',
-    ]
-
-    for pattern in img_patterns:
-        match = re.search(pattern, decoded, re.IGNORECASE)
-        if match:
-            img_url = match.group(1)
-            # Skip tiny tracking pixels and icons
-            if 'pixel' in img_url.lower() or '1x1' in img_url or 'tracking' in img_url.lower():
-                continue
-            # Skip data URIs
-            if img_url.startswith('data:'):
-                continue
-            # Validate it looks like a real image URL
-            if any(ext in img_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-                return img_url
-            # Also accept URLs that look like image endpoints
-            if any(term in img_url.lower() for term in ['img', 'image', 'photo', 'thumb', 'media', 'cdn']):
-                return img_url
-
-    return None
-
-
-async def fetch_og_image(client: httpx.AsyncClient, url: str) -> Optional[str]:
-    """Fetch Open Graph image from article URL"""
+    articles = []
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        }
-
-        # Google News URLs need special handling - they redirect to the actual article
-        # Try to follow redirects to get the final URL
-        response = await client.get(url, timeout=8.0, headers=headers, follow_redirects=True)
-
-        if response.status_code != 200:
-            print(f"[News] OG fetch failed for {url[:50]}: HTTP {response.status_code}")
-            return None
-
-        html = response.text[:100000]  # Check first 100KB
-
-        # Look for og:image meta tag - try multiple patterns
-        og_patterns = [
-            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
-            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-            r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
-            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
-            r'<meta[^>]+property=["\']og:image:url["\'][^>]+content=["\']([^"\']+)["\']',
-            # Also try to find large images in the page
-            r'<img[^>]+src=["\']([^"\']+)["\'][^>]+class=["\'][^"\']*(?:featured|hero|main|article)[^"\']*["\']',
-        ]
-
-        for pattern in og_patterns:
-            match = re.search(pattern, html, re.IGNORECASE)
-            if match:
-                img_url = match.group(1)
-                # Skip invalid URLs
-                if not img_url or img_url.startswith('data:'):
-                    continue
-                # Skip tiny images (likely icons/logos)
-                if '1x1' in img_url or 'pixel' in img_url or 'logo' in img_url.lower():
-                    continue
-                # Make relative URLs absolute
-                if img_url.startswith('//'):
-                    img_url = 'https:' + img_url
-                elif img_url.startswith('/'):
-                    # Get base URL from response
-                    from urllib.parse import urlparse
-                    parsed = urlparse(str(response.url))
-                    img_url = f"{parsed.scheme}://{parsed.netloc}{img_url}"
-
-                return img_url
-
-    except httpx.TimeoutException:
-        print(f"[News] OG fetch timeout for {url[:50]}")
-    except Exception as e:
-        print(f"[News] OG fetch error for {url[:50]}: {type(e).__name__}")
-
-    return None
-
-
-def calculate_relevance(title: str, description: str) -> float:
-    """Calculate relevance score based on flexo keywords"""
-    text = f"{title} {description}".lower()
-    score = 0.0
-
-    # Check for keywords
-    for keyword in FLEXO_KEYWORDS:
-        if keyword.lower() in text:
-            # Primary flexo terms get higher weight
-            if keyword.lower() in ['flexo', 'flexographic', 'flexography', 'photopolymer']:
-                score += 0.15
-            elif keyword.lower() in ['plate', 'plates', 'anilox', 'pre-press', 'prepress']:
-                score += 0.10
-            else:
-                score += 0.05
-
-    return min(score, 1.0)  # Cap at 1.0
-
-
-def parse_rss_date(date_str: str) -> Optional[datetime]:
-    """Parse various RSS date formats"""
-    if not date_str:
-        return None
-
-    formats = [
-        '%a, %d %b %Y %H:%M:%S %z',
-        '%a, %d %b %Y %H:%M:%S %Z',
-        '%Y-%m-%dT%H:%M:%S%z',
-        '%Y-%m-%dT%H:%M:%SZ',
-        '%Y-%m-%d %H:%M:%S',
-        '%Y-%m-%d',
-    ]
-
-    for fmt in formats:
-        try:
-            return datetime.strptime(date_str.strip(), fmt)
-        except ValueError:
-            continue
-
-    return None
-
-
-async def fetch_feed(client: httpx.AsyncClient, feed: dict) -> List[dict]:
-    """Fetch and parse a single RSS feed"""
-    items = []
-
-    try:
-        # Add headers to mimic browser request
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/rss+xml, application/xml, text/xml, */*"
         }
-        response = await client.get(feed["url"], timeout=15.0, headers=headers)
 
-        print(f"[News] {feed['name']}: HTTP {response.status_code}")
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            response = await client.get(feed_info["url"], headers=headers)
 
-        if response.status_code != 200:
-            print(f"[News] {feed['name']}: Failed with status {response.status_code}")
-            return items
+            if response.status_code != 200:
+                print(f"[News] {feed_info['name']}: HTTP {response.status_code}")
+                return articles
 
-        content = response.text
+            content = response.text
 
-        # Check if we got valid XML
-        if not content.strip().startswith('<?xml') and not content.strip().startswith('<rss') and not content.strip().startswith('<feed'):
-            print(f"[News] {feed['name']}: Invalid XML response")
-            return items
+            # Check for valid XML
+            if not content.strip().startswith('<?xml') and not content.strip().startswith('<rss') and not content.strip().startswith('<feed'):
+                print(f"[News] {feed_info['name']}: Invalid XML")
+                return articles
 
-        root = ET.fromstring(content)
+            root = ET.fromstring(content)
 
-        # Handle both RSS 2.0 and Atom formats
-        namespaces = {
-            'atom': 'http://www.w3.org/2005/Atom',
-            'media': 'http://search.yahoo.com/mrss/',
-            'content': 'http://purl.org/rss/1.0/modules/content/'
-        }
+            # RSS 2.0 format
+            channel = root.find('channel')
+            if channel is not None:
+                for item in channel.findall('item')[:15]:  # Limit per source
+                    title = item.findtext('title', '')
+                    link = item.findtext('link', '')
+                    description = item.findtext('description', '')
+                    pub_date = item.findtext('pubDate', '')
 
-        # Try RSS 2.0 format first
-        channel = root.find('channel')
-        if channel is not None:
-            for item in channel.findall('item'):
-                title = item.findtext('title', '')
-                description = item.findtext('description', '')
-                link = item.findtext('link', '')
-                pub_date = item.findtext('pubDate', '')
+                    if not title or not link:
+                        continue
 
-                # Try multiple methods to get image
-                image_url = None
+                    # Generate unique ID
+                    external_id = hashlib.md5(link.encode()).hexdigest()
 
-                # Method 1: media:content tag
-                media_content = item.find('media:content', namespaces)
-                if media_content is not None:
-                    image_url = media_content.get('url')
+                    # Parse date
+                    published = None
+                    if pub_date:
+                        for fmt in ['%a, %d %b %Y %H:%M:%S %z', '%a, %d %b %Y %H:%M:%S %Z', '%Y-%m-%dT%H:%M:%S%z']:
+                            try:
+                                published = datetime.strptime(pub_date.strip(), fmt)
+                                break
+                            except:
+                                pass
 
-                # Method 2: media:thumbnail tag
-                if not image_url:
-                    media_thumb = item.find('media:thumbnail', namespaces)
-                    if media_thumb is not None:
-                        image_url = media_thumb.get('url')
-
-                # Method 3: enclosure tag with image type
-                if not image_url:
-                    enclosure = item.find('enclosure')
-                    if enclosure is not None:
-                        enc_type = enclosure.get('type', '')
-                        if 'image' in enc_type:
-                            image_url = enclosure.get('url')
-
-                # Method 4: image tag (some feeds have this)
-                if not image_url:
-                    image_elem = item.find('image')
-                    if image_elem is not None:
-                        image_url = image_elem.findtext('url') or image_elem.get('url')
-
-                # Method 5: Extract from description HTML (common in Google News)
-                if not image_url:
-                    # Get raw description with HTML
-                    raw_desc = item.findtext('description', '')
-                    image_url = extract_image_from_html(raw_desc)
-
-                # Method 6: content:encoded field (WordPress feeds)
-                if not image_url:
-                    content_encoded = item.findtext('content:encoded', '', namespaces)
-                    if content_encoded:
-                        image_url = extract_image_from_html(content_encoded)
-
-                # Method 7: Try to get from source element (Google News specific)
-                if not image_url:
-                    source_elem = item.find('source')
-                    if source_elem is not None:
-                        source_url = source_elem.get('url')
-                        if source_url:
-                            image_url = extract_image_from_html(source_url)
-
-                # Debug: Log when we find images
-                if image_url:
-                    print(f"[News] Found image for '{title[:30]}...': {image_url[:50]}...")
-
-                if title and link:
-                    items.append({
-                        "title": clean_html(title),
-                        "description": clean_html(description),
+                    articles.append({
+                        "external_id": external_id,
                         "url": link,
-                        "source": feed["name"],
-                        "source_url": feed["url"].split('/feed')[0].split('/rss')[0],
-                        "category": feed["category"],
-                        "published_date": pub_date,
-                        "image_url": image_url
+                        "title": clean_html(title),
+                        "summary": clean_html(description),
+                        "source_name": feed_info["name"],
+                        "source_url": feed_info["url"],
+                        "category": feed_info["category"],
+                        "region": feed_info.get("region", "Global"),
+                        "published_at": published
                     })
 
-        # Try Atom format
-        else:
-            for entry in root.findall('atom:entry', namespaces) or root.findall('entry'):
-                title = entry.findtext('atom:title', '', namespaces) or entry.findtext('title', '')
-                summary = entry.findtext('atom:summary', '', namespaces) or entry.findtext('summary', '')
+            # Atom format
+            else:
+                namespaces = {'atom': 'http://www.w3.org/2005/Atom'}
+                for entry in (root.findall('atom:entry', namespaces) or root.findall('entry'))[:15]:
+                    title = entry.findtext('atom:title', '', namespaces) or entry.findtext('title', '')
+                    link_elem = entry.find('atom:link', namespaces) or entry.find('link')
+                    link = link_elem.get('href', '') if link_elem is not None else ''
+                    summary = entry.findtext('atom:summary', '', namespaces) or entry.findtext('summary', '')
+                    updated = entry.findtext('atom:updated', '', namespaces) or entry.findtext('updated', '')
 
-                link_elem = entry.find('atom:link', namespaces) or entry.find('link')
-                link = link_elem.get('href', '') if link_elem is not None else ''
+                    if not title or not link:
+                        continue
 
-                updated = entry.findtext('atom:updated', '', namespaces) or entry.findtext('updated', '')
+                    external_id = hashlib.md5(link.encode()).hexdigest()
 
-                # Try to extract image from Atom entry
-                image_url = None
+                    published = None
+                    if updated:
+                        try:
+                            published = datetime.fromisoformat(updated.replace('Z', '+00:00'))
+                        except:
+                            pass
 
-                # Method 1: media:thumbnail
-                media_thumb = entry.find('media:thumbnail', namespaces)
-                if media_thumb is not None:
-                    image_url = media_thumb.get('url')
-
-                # Method 2: media:content
-                if not image_url:
-                    media_content = entry.find('media:content', namespaces)
-                    if media_content is not None:
-                        image_url = media_content.get('url')
-
-                # Method 3: Extract from summary/content HTML
-                if not image_url:
-                    raw_summary = entry.findtext('atom:summary', '', namespaces) or entry.findtext('summary', '')
-                    image_url = extract_image_from_html(raw_summary)
-
-                if not image_url:
-                    content = entry.findtext('atom:content', '', namespaces) or entry.findtext('content', '')
-                    image_url = extract_image_from_html(content)
-
-                if title and link:
-                    items.append({
-                        "title": clean_html(title),
-                        "description": clean_html(summary),
+                    articles.append({
+                        "external_id": external_id,
                         "url": link,
-                        "source": feed["name"],
-                        "source_url": feed["url"].split('/feed')[0],
-                        "category": feed["category"],
-                        "published_date": updated,
-                        "image_url": image_url
+                        "title": clean_html(title),
+                        "summary": clean_html(summary),
+                        "source_name": feed_info["name"],
+                        "source_url": feed_info["url"],
+                        "category": feed_info["category"],
+                        "region": feed_info.get("region", "Global"),
+                        "published_at": published
                     })
+
+        print(f"[News] {feed_info['name']}: Retrieved {len(articles)} items")
 
     except ET.ParseError as e:
-        print(f"[News] {feed['name']}: XML parse error - {e}")
-    except httpx.TimeoutException:
-        print(f"[News] {feed['name']}: Request timeout")
-    except httpx.RequestError as e:
-        print(f"[News] {feed['name']}: Request error - {e}")
+        print(f"[News] {feed_info['name']}: XML parse error - {e}")
     except Exception as e:
-        print(f"[News] {feed['name']}: Unexpected error - {type(e).__name__}: {e}")
+        print(f"[News] {feed_info['name']}: Error - {type(e).__name__}: {e}")
 
-    print(f"[News] {feed['name']}: Retrieved {len(items)} items")
-    return items
+    return articles
 
+# =============================================================================
+# Background Job: Fetch and Store News
+# =============================================================================
+async def fetch_and_store_news():
+    """Background job to fetch news from all sources."""
+    pool = await get_pool()
 
-def get_fallback_news() -> List[NewsItem]:
-    """Return fallback news items when RSS feeds fail"""
-    # Provide recent industry news as fallback
-    fallback_items = [
-        {
-            "id": "fallback_1",
-            "title": "Flexographic Printing Market Expected to Reach $220 Billion by 2030",
-            "description": "The global flexographic printing market continues strong growth driven by sustainable packaging demands and label printing innovations.",
-            "url": "https://www.flexography.org",
-            "source": "Industry Report",
-            "category": "industry",
-            "relevance_score": 0.9
-        },
-        {
-            "id": "fallback_2",
-            "title": "New UV LED Technology Improves Plate Exposure Consistency",
-            "description": "Latest UV LED systems offer better wavelength control and reduced energy consumption for flexo plate exposure.",
-            "url": "https://www.labelsandlabeling.com",
-            "source": "Labels & Labeling",
-            "category": "industry",
-            "relevance_score": 0.85
-        },
-        {
-            "id": "fallback_3",
-            "title": "Sustainable Inks Drive Flexo Market Innovation",
-            "description": "Water-based and bio-based inks are gaining market share as brands push for sustainable packaging solutions.",
-            "url": "https://www.inkworldmagazine.com",
-            "source": "Ink World",
-            "category": "industry",
-            "relevance_score": 0.8
-        },
-        {
-            "id": "fallback_4",
-            "title": "Labelexpo 2025 Highlights Automation and Sustainability",
-            "description": "The leading label and packaging trade show featured latest advances in press automation and eco-friendly materials.",
-            "url": "https://www.labelexpo.com",
-            "source": "Labelexpo",
-            "category": "labels",
-            "relevance_score": 0.75
-        },
-        {
-            "id": "fallback_5",
-            "title": "Corrugated Packaging Demand Surges with E-commerce Growth",
-            "description": "Online shopping continues to drive demand for corrugated packaging, with flexo printing playing key role.",
-            "url": "https://www.packworld.com",
-            "source": "Packaging World",
-            "category": "packaging",
-            "relevance_score": 0.7
-        },
-        {
-            "id": "fallback_6",
-            "title": "Digital Plate Making Advances Reduce Prepress Time",
-            "description": "New direct-to-plate imaging systems cut plate production time while improving consistency.",
-            "url": "https://www.packageprinting.com",
-            "source": "Package Printing",
-            "category": "industry",
-            "relevance_score": 0.7
-        }
-    ]
+    print(f"[News] Starting fetch at {datetime.now()}")
 
-    return [
-        NewsItem(
-            id=item["id"],
-            title=item["title"],
-            description=item["description"],
-            url=item["url"],
-            source=item["source"],
-            source_url=item["url"],
-            category=item["category"],
-            published_date=datetime.now().isoformat(),
-            image_url=None,
-            relevance_score=item["relevance_score"]
+    # Step 1: Get all article URLs from RSS feeds
+    all_articles = []
+    tasks = [parse_rss_feed(feed) for feed in RSS_FEEDS]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for result in results:
+        if isinstance(result, list):
+            all_articles.extend(result)
+
+    print(f"[News] Found {len(all_articles)} articles from {len(RSS_FEEDS)} feeds")
+
+    # Step 2: Check which articles are new
+    async with pool.acquire() as conn:
+        existing_ids = await conn.fetch(
+            "SELECT external_id FROM news_articles WHERE created_at > NOW() - INTERVAL '7 days'"
         )
-        for item in fallback_items
-    ]
+        existing_set = {row['external_id'] for row in existing_ids}
 
+    new_articles = [a for a in all_articles if a['external_id'] not in existing_set]
+    print(f"[News] Found {len(new_articles)} new articles")
 
-async def fetch_all_feeds() -> List[NewsItem]:
-    """Fetch news from all configured RSS feeds"""
-    all_items = []
+    # Step 3: Fetch OpenGraph data for new articles
+    fetched_count = 0
+    max_fetch = 30  # Limit per run
 
-    print(f"[News] Starting fetch from {len(RSS_FEEDS)} sources...")
+    for article in new_articles[:max_fetch]:
+        html = await fetch_with_zenrows(article['url'])
 
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        tasks = [fetch_feed(client, feed) for feed in RSS_FEEDS]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if html:
+            og_data = extract_opengraph(html, article['title'], article.get('summary', ''))
 
-        successful_feeds = 0
-        for i, result in enumerate(results):
-            if isinstance(result, list):
-                all_items.extend(result)
-                if len(result) > 0:
-                    successful_feeds += 1
-            elif isinstance(result, Exception):
-                print(f"[News] Feed exception: {result}")
+            # Update article with OG data
+            if og_data['title'] and len(og_data['title']) > len(article.get('title', '')):
+                article['title'] = og_data['title']
+            if og_data['description'] and len(og_data['description']) > len(article.get('summary', '')):
+                article['summary'] = og_data['description']
+            article['image_url'] = og_data['image']
+            article['og_title'] = og_data['title']
+            article['og_description'] = og_data['description']
+            article['og_image'] = og_data['image']
 
-        print(f"[News] Fetched {len(all_items)} items from {successful_feeds} successful feeds")
+        # Store in database (even without image)
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO news_articles
+                    (external_id, title, summary, url, image_url, source_name, source_url,
+                     category, region, published_at, og_title, og_description, og_image)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    ON CONFLICT (external_id) DO UPDATE SET
+                        image_url = COALESCE(EXCLUDED.image_url, news_articles.image_url),
+                        fetched_at = NOW()
+                """,
+                    article['external_id'],
+                    article['title'][:500] if article.get('title') else 'Untitled',
+                    article.get('summary', '')[:2000] if article.get('summary') else '',
+                    article['url'],
+                    article.get('image_url'),
+                    article['source_name'],
+                    article.get('source_url'),
+                    article['category'],
+                    article['region'],
+                    article.get('published_at'),
+                    article.get('og_title'),
+                    article.get('og_description'),
+                    article.get('og_image')
+                )
 
-        # Fetch OG images for items without images (limit to first 50 to balance speed/coverage)
-        items_needing_images = [item for item in all_items if not item.get("image_url")][:50]
-        if items_needing_images:
-            print(f"[News] Fetching OG images for {len(items_needing_images)} items...")
-            og_tasks = [fetch_og_image(client, item["url"]) for item in items_needing_images]
-            og_results = await asyncio.gather(*og_tasks, return_exceptions=True)
+            fetched_count += 1
+            img_status = '✓' if article.get('image_url') else '✗'
+            print(f"[News] Stored: {article['title'][:40]}... (img: {img_status})")
 
-            og_found = 0
-            for item, og_image in zip(items_needing_images, og_results):
-                if isinstance(og_image, str) and og_image:
-                    item["image_url"] = og_image
-                    og_found += 1
-                    print(f"[News] OG image found for '{item['title'][:30]}...'")
+        except Exception as e:
+            print(f"[News] DB error for {article['title'][:30]}: {e}")
 
-            print(f"[News] OG image fetch complete: {og_found}/{len(items_needing_images)} found")
+        # Small delay between Zenrows requests
+        await asyncio.sleep(0.3)
 
-    # Process and score items
-    news_items = []
-    seen_urls = set()
+    # Cleanup old articles (keep 30 days)
+    try:
+        async with pool.acquire() as conn:
+            deleted = await conn.execute(
+                "DELETE FROM news_articles WHERE created_at < NOW() - INTERVAL '30 days'"
+            )
+            print(f"[News] Cleaned up old articles")
+    except:
+        pass
 
-    for item in all_items:
-        # Skip duplicates
-        if item["url"] in seen_urls:
-            continue
-        seen_urls.add(item["url"])
+    print(f"[News] Fetch complete: {fetched_count} articles stored")
+    return fetched_count
 
-        # Calculate relevance
-        relevance = calculate_relevance(item["title"], item["description"])
-
-        # Include all items from industry sources - they're already relevant by source
-        # Use relevance score for sorting/ranking, not filtering
-        # Generate stable ID
-        item_id = hashlib.md5(item["url"].encode()).hexdigest()[:12]
-
-        # Parse date
-        parsed_date = parse_rss_date(item["published_date"])
-        date_str = parsed_date.isoformat() if parsed_date else None
-
-        news_items.append(NewsItem(
-            id=item_id,
-            title=item["title"],
-            description=item["description"],
-            url=item["url"],
-            source=item["source"],
-            source_url=item.get("source_url"),
-            category=item["category"],
-            published_date=date_str,
-            image_url=item.get("image_url"),
-            relevance_score=relevance
-        ))
-
-    # Sort by relevance first, then by date
-    news_items.sort(key=lambda x: (x.relevance_score, x.published_date or ""), reverse=True)
-
-    # If no items found from feeds, use fallback news
-    if len(news_items) == 0:
-        print("[News] No items from feeds, using fallback news")
-        return get_fallback_news()
-
-    print(f"[News] Returning {len(news_items)} news items")
-    return news_items
-
-
+# =============================================================================
+# API Endpoints
+# =============================================================================
 @router.get("", response_model=NewsResponse)
 async def get_news(
-    category: Optional[str] = None,
-    limit: int = 50,
-    min_relevance: float = 0.0
+    category: Optional[str] = Query(None),
+    region: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0)
 ):
-    """
-    Get aggregated news from flexographic and printing industry sources.
+    """Get news articles from database."""
+    pool = await get_pool()
 
-    - **category**: Filter by category (industry, packaging, labels, converting)
-    - **limit**: Maximum number of items to return (default 50)
-    - **min_relevance**: Minimum relevance score (0.0 to 1.0)
-    """
-    global _news_cache
+    # Build query
+    conditions = ["1=1"]
+    params = []
+    param_idx = 1
 
-    # Check cache
-    cache_valid = (
-        _news_cache["last_fetch"] is not None and
-        datetime.now() - _news_cache["last_fetch"] < timedelta(minutes=_news_cache["cache_duration_minutes"]) and
-        len(_news_cache["items"]) > 0
-    )
+    if category and category.lower() != 'all':
+        conditions.append(f"LOWER(category) = LOWER(${param_idx})")
+        params.append(category)
+        param_idx += 1
 
-    if not cache_valid:
-        # Fetch fresh news
-        items = await fetch_all_feeds()
-        _news_cache["items"] = items
-        _news_cache["last_fetch"] = datetime.now()
+    if region and region.lower() != 'all':
+        conditions.append(f"LOWER(region) = LOWER(${param_idx})")
+        params.append(region)
+        param_idx += 1
 
-    # Filter items
-    filtered_items = _news_cache["items"]
+    where_clause = " AND ".join(conditions)
 
-    if category:
-        filtered_items = [i for i in filtered_items if i.category == category]
+    async with pool.acquire() as conn:
+        # Get total count
+        total = await conn.fetchval(
+            f"SELECT COUNT(*) FROM news_articles WHERE {where_clause}",
+            *params
+        )
 
-    if min_relevance > 0:
-        filtered_items = [i for i in filtered_items if i.relevance_score >= min_relevance]
+        # Get articles
+        rows = await conn.fetch(f"""
+            SELECT id, title, summary, url, image_url, source_name, category, region, published_at
+            FROM news_articles
+            WHERE {where_clause}
+            ORDER BY COALESCE(published_at, created_at) DESC
+            LIMIT ${param_idx} OFFSET ${param_idx + 1}
+        """, *params, limit, offset)
 
-    # Apply limit
-    filtered_items = filtered_items[:limit]
+    articles = [
+        NewsArticle(
+            id=str(row['id']),
+            title=row['title'],
+            summary=row['summary'],
+            url=row['url'],
+            image_url=row['image_url'],
+            source_name=row['source_name'],
+            category=row['category'],
+            region=row['region'],
+            published_at=row['published_at']
+        )
+        for row in rows
+    ]
 
     return NewsResponse(
-        items=filtered_items,
-        total=len(filtered_items),
-        sources_checked=len(RSS_FEEDS),
-        last_updated=_news_cache["last_fetch"].isoformat() if _news_cache["last_fetch"] else None
+        articles=articles,
+        total=total or 0,
+        has_more=(offset + limit) < (total or 0)
     )
 
-
 @router.get("/sources")
-async def get_news_sources():
-    """Get list of configured news sources"""
+async def get_sources():
+    """List all configured news sources."""
     return {
-        "sources": [
-            {
-                "name": feed["name"],
-                "category": feed["category"],
-                "url": feed["url"].split('/feed')[0].split('/rss')[0]
-            }
-            for feed in RSS_FEEDS
-        ],
-        "total": len(RSS_FEEDS)
+        "sources": [{"name": f["name"], "category": f["category"], "region": f["region"]} for f in RSS_FEEDS],
+        "total": len(RSS_FEEDS),
+        "categories": list(set(f["category"] for f in RSS_FEEDS)),
+        "regions": list(set(f["region"] for f in RSS_FEEDS))
     }
 
-
 @router.post("/refresh")
-async def refresh_news():
-    """Force refresh of news cache"""
-    global _news_cache
+async def refresh_news(background_tasks: BackgroundTasks):
+    """Trigger a news refresh (runs in background)."""
+    background_tasks.add_task(fetch_and_store_news)
+    return {"message": "News refresh started", "status": "processing"}
 
-    items = await fetch_all_feeds()
-    _news_cache["items"] = items
-    _news_cache["last_fetch"] = datetime.now()
+@router.get("/stats")
+async def get_stats():
+    """Get news database statistics."""
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        total = await conn.fetchval("SELECT COUNT(*) FROM news_articles") or 0
+        with_images = await conn.fetchval("SELECT COUNT(*) FROM news_articles WHERE image_url IS NOT NULL") or 0
+        latest = await conn.fetchval("SELECT MAX(fetched_at) FROM news_articles")
+
+        by_source = await conn.fetch("""
+            SELECT source_name, COUNT(*) as count
+            FROM news_articles
+            GROUP BY source_name
+            ORDER BY count DESC
+            LIMIT 20
+        """)
+
+        by_category = await conn.fetch("""
+            SELECT category, COUNT(*) as count
+            FROM news_articles
+            GROUP BY category
+            ORDER BY count DESC
+        """)
 
     return {
-        "message": "News refreshed",
-        "items_count": len(items),
-        "timestamp": _news_cache["last_fetch"].isoformat()
+        "total_articles": total,
+        "with_images": with_images,
+        "image_percentage": round(with_images / total * 100, 1) if total > 0 else 0,
+        "last_fetch": latest.isoformat() if latest else None,
+        "by_source": [{"source": r["source_name"], "count": r["count"]} for r in by_source],
+        "by_category": [{"category": r["category"], "count": r["count"]} for r in by_category]
     }

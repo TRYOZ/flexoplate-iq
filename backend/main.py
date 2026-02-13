@@ -12,6 +12,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timedelta, date
+import asyncio
 import bcrypt
 import asyncpg
 import uuid
@@ -28,6 +29,7 @@ from knowledge_scraper import router as knowledge_router
 from knowledge_loader import router as knowledge_loader_router
 from plate_data_importer import router as plate_importer_router
 from news_aggregator import router as news_router
+import news_aggregator
 # ============================================================
 # APP SETUP
 # ============================================================
@@ -178,11 +180,22 @@ async def init_knowledge_base_tables(conn):
 
     print("Knowledge base tables initialized successfully")
 
+async def periodic_news_refresh():
+    """Background task to refresh news every 30 minutes."""
+    while True:
+        await asyncio.sleep(30 * 60)  # 30 minutes
+        try:
+            print("[News] Starting periodic refresh...")
+            await news_aggregator.fetch_and_store_news()
+        except Exception as e:
+            print(f"[News] Periodic refresh error: {e}")
+
 @app.on_event("startup")
 async def startup():
     global pool
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
     intelligence_routes._pool = pool
+    news_aggregator.set_pool(pool)
 
     # Initialize knowledge base tables
     try:
@@ -190,6 +203,17 @@ async def startup():
             await init_knowledge_base_tables(conn)
     except Exception as e:
         print(f"Warning: Could not initialize knowledge base tables: {e}")
+
+    # Initialize news table
+    try:
+        async with pool.acquire() as conn:
+            await news_aggregator.init_news_table(conn)
+        # Trigger initial news fetch in background
+        asyncio.create_task(news_aggregator.fetch_and_store_news())
+        # Start periodic news refresh (every 30 minutes)
+        asyncio.create_task(periodic_news_refresh())
+    except Exception as e:
+        print(f"Warning: Could not initialize news system: {e}")
 
 @app.on_event("shutdown")
 async def shutdown():
