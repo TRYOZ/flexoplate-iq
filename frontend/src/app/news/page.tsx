@@ -26,6 +26,10 @@ import {
   CalendarDays,
   User,
   Check,
+  ArrowUpDown,
+  ArrowDown,
+  ArrowUp,
+  Image as ImageIcon,
 } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-production-ade4.up.railway.app';
@@ -144,6 +148,14 @@ const TIME_FILTERS = [
   { id: 'today', label: 'Today' },
   { id: 'week', label: 'This Week' },
   { id: 'month', label: 'This Month' },
+];
+
+// Sort options
+const SORT_OPTIONS = [
+  { id: 'latest', label: 'Latest First', icon: ArrowDown },
+  { id: 'oldest', label: 'Oldest First', icon: ArrowUp },
+  { id: 'relevance', label: 'Most Relevant', icon: Sparkles },
+  { id: 'az', label: 'A-Z', icon: ArrowUpDown },
 ];
 
 // Tool to topic mapping (for "For You" recommendations)
@@ -272,8 +284,10 @@ export default function NewsPage() {
   // Filter state
   const [preferences, setPreferences] = useState<UserPreferences>(getDefaultPreferences());
   const [timeFilter, setTimeFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('latest');
   const [showFilters, setShowFilters] = useState(false);
   const [showRoleSelector, setShowRoleSelector] = useState(false);
+  const [showSortDropdown, setShowSortDropdown] = useState(false);
   const [activeView, setActiveView] = useState<'foryou' | 'all' | 'trending'>('foryou');
 
   // Load preferences on mount
@@ -393,20 +407,46 @@ export default function NewsPage() {
       };
     });
 
-    // Sort based on view
-    if (activeView === 'foryou') {
-      // For You: prioritize by personal relevance score
+    // Apply sorting based on sortBy state
+    const applySorting = (items: typeof scored) => {
+      switch (sortBy) {
+        case 'latest':
+          return items.sort((a, b) => {
+            const aDate = a.published_date ? new Date(a.published_date).getTime() : 0;
+            const bDate = b.published_date ? new Date(b.published_date).getTime() : 0;
+            return bDate - aDate;
+          });
+        case 'oldest':
+          return items.sort((a, b) => {
+            const aDate = a.published_date ? new Date(a.published_date).getTime() : 0;
+            const bDate = b.published_date ? new Date(b.published_date).getTime() : 0;
+            return aDate - bDate;
+          });
+        case 'relevance':
+          return items.sort((a, b) => b.personalScore - a.personalScore);
+        case 'az':
+          return items.sort((a, b) => a.title.localeCompare(b.title));
+        default:
+          return items;
+      }
+    };
+
+    // For "For You" and "Trending" views, apply view-specific sorting first, then user sort
+    if (activeView === 'foryou' && sortBy === 'relevance') {
+      // For You with relevance sort: prioritize by personal relevance score
       scored.sort((a, b) => b.personalScore - a.personalScore);
-    } else if (activeView === 'trending') {
-      // Trending: prioritize recent + high base relevance
+    } else if (activeView === 'trending' && sortBy === 'latest') {
+      // Trending with latest sort: prioritize recent + high base relevance
       scored.sort((a, b) => {
         const aDate = a.published_date ? new Date(a.published_date).getTime() : 0;
         const bDate = b.published_date ? new Date(b.published_date).getTime() : 0;
-        const recencyScore = (bDate - aDate) / (1000 * 60 * 60 * 24 * 7); // Favor last 7 days
+        const recencyScore = (bDate - aDate) / (1000 * 60 * 60 * 24 * 7);
         return (b.relevance_score + recencyScore * 0.1) - (a.relevance_score + recencyScore * 0.1);
       });
+    } else {
+      // Apply standard sorting
+      applySorting(scored);
     }
-    // 'all' view: keep original order (by date/relevance from API)
 
     // Filter by selected topics if in topic filter mode
     if (preferences.selectedTopics.length > 0 && activeView !== 'all') {
@@ -414,7 +454,7 @@ export default function NewsPage() {
     }
 
     return scored;
-  }, [news, preferences, timeFilter, activeView]);
+  }, [news, preferences, timeFilter, activeView, sortBy]);
 
   const filteredNews = getFilteredNews();
 
@@ -666,10 +706,57 @@ export default function NewsPage() {
         {/* News Grid */}
         {filteredNews.length > 0 ? (
           <>
-            {/* Results count */}
-            <div className="text-sm text-gray-500 mb-4">
-              Showing {filteredNews.length} article{filteredNews.length !== 1 ? 's' : ''}
-              {activeView === 'foryou' && ' personalized for you'}
+            {/* Results count and Sort */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="text-sm text-gray-500">
+                Showing {filteredNews.length} article{filteredNews.length !== 1 ? 's' : ''}
+                {activeView === 'foryou' && ' personalized for you'}
+              </div>
+
+              {/* Sort Dropdown */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowSortDropdown(!showSortDropdown)}
+                  className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <ArrowUpDown className="w-4 h-4 text-gray-400" />
+                  {SORT_OPTIONS.find(s => s.id === sortBy)?.label || 'Sort'}
+                  <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${showSortDropdown ? 'rotate-180' : ''}`} />
+                </button>
+
+                {showSortDropdown && (
+                  <>
+                    {/* Backdrop to close dropdown */}
+                    <div
+                      className="fixed inset-0 z-10"
+                      onClick={() => setShowSortDropdown(false)}
+                    />
+                    <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+                      {SORT_OPTIONS.map(option => {
+                        const Icon = option.icon;
+                        return (
+                          <button
+                            key={option.id}
+                            onClick={() => {
+                              setSortBy(option.id);
+                              setShowSortDropdown(false);
+                            }}
+                            className={`w-full flex items-center gap-2 px-4 py-2 text-sm text-left transition-colors ${
+                              sortBy === option.id
+                                ? 'bg-blue-50 text-blue-700'
+                                : 'text-gray-700 hover:bg-gray-50'
+                            }`}
+                          >
+                            <Icon className="w-4 h-4" />
+                            {option.label}
+                            {sortBy === option.id && <Check className="w-4 h-4 ml-auto" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -761,6 +848,9 @@ function NewsCard({
 }) {
   const matchPercent = Math.round(personalScore * 100);
   const topicBadges = matchedTopics.slice(0, 2).map(t => TOPIC_TAGS.find(tag => tag.id === t)).filter(Boolean);
+  const [imageError, setImageError] = useState(false);
+
+  const hasValidImage = item.image_url && !imageError;
 
   return (
     <a
@@ -775,7 +865,7 @@ function NewsCard({
       {/* Dismiss button */}
       <button
         onClick={(e) => onDismiss(item.id, e)}
-        className="absolute top-2 right-2 p-1.5 bg-white/90 hover:bg-red-50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10"
+        className={`absolute ${hasValidImage ? 'top-2' : 'top-2'} right-2 p-1.5 bg-white/90 hover:bg-red-50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10`}
         title="Not interested"
       >
         <ThumbsDown className="w-3.5 h-3.5 text-gray-400 hover:text-red-500" />
@@ -783,18 +873,32 @@ function NewsCard({
 
       {/* Match score indicator */}
       {matchPercent > 50 && (
-        <div className="absolute top-2 left-2 bg-green-500 text-white text-xs font-medium px-2 py-0.5 rounded-full flex items-center gap-1">
+        <div className={`absolute ${hasValidImage ? 'top-2' : 'top-2'} left-2 bg-green-500 text-white text-xs font-medium px-2 py-0.5 rounded-full flex items-center gap-1 z-10`}>
           <Sparkles className="w-3 h-3" />
           {matchPercent}% match
         </div>
       )}
 
-      {/* Color bar based on top matched topic */}
-      <div className={`h-1.5 ${
-        topicBadges[0]
-          ? topicBadges[0].color.split(' ')[0]
-          : 'bg-gray-200'
-      }`} />
+      {/* Article Image */}
+      {hasValidImage ? (
+        <div className="relative h-40 bg-gray-100 overflow-hidden">
+          <img
+            src={item.image_url!}
+            alt={item.title}
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+            onError={() => setImageError(true)}
+          />
+          {/* Gradient overlay for better text readability */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent" />
+        </div>
+      ) : (
+        /* Color bar fallback when no image */
+        <div className={`h-2 ${
+          topicBadges[0]
+            ? topicBadges[0].color.split(' ')[0]
+            : 'bg-gradient-to-r from-blue-500 to-purple-500'
+        }`} />
+      )}
 
       <div className="p-4 flex-1 flex flex-col">
         {/* Topic badges and source */}
