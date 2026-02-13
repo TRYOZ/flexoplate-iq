@@ -39,21 +39,26 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://vibrant-curiosity-p
 interface NewsItem {
   id: string;
   title: string;
-  description: string;
+  summary: string | null;
   url: string;
-  source: string;
-  source_url: string | null;
+  source_name: string;
   category: string;
-  published_date: string | null;
+  region: string;
+  published_at: string | null;
   image_url: string | null;
-  relevance_score: number;
 }
 
 interface NewsResponse {
-  items: NewsItem[];
+  articles: NewsItem[];
   total: number;
-  sources_checked: number;
-  last_updated: string | null;
+  has_more: boolean;
+}
+
+interface NewsSourcesResponse {
+  sources: { name: string; category: string; region: string }[];
+  total: number;
+  categories: string[];
+  regions: string[];
 }
 
 interface UserPreferences {
@@ -228,7 +233,7 @@ const trackToolVisit = () => {
 
 // Calculate topic relevance score for an article
 const calculateTopicRelevance = (item: NewsItem, topics: string[]): { score: number; matchedTopics: string[] } => {
-  const text = `${item.title} ${item.description}`.toLowerCase();
+  const text = `${item.title} ${item.summary || ''}`.toLowerCase();
   const matchedTopics: string[] = [];
   let score = 0;
 
@@ -265,9 +270,9 @@ const getRecommendedTopics = (prefs: UserPreferences): string[] => {
 
 // Filter by time
 const filterByTime = (item: NewsItem, timeFilter: string): boolean => {
-  if (timeFilter === 'all' || !item.published_date) return true;
+  if (timeFilter === 'all' || !item.published_at) return true;
 
-  const itemDate = new Date(item.published_date);
+  const itemDate = new Date(item.published_at);
   const now = new Date();
   const diffMs = now.getTime() - itemDate.getTime();
   const diffDays = diffMs / (1000 * 60 * 60 * 24);
@@ -287,8 +292,8 @@ export default function NewsPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
-  const [sourcesChecked, setSourcesChecked] = useState(0);
+  const [totalArticles, setTotalArticles] = useState(0);
+  const [sourcesInfo, setSourcesInfo] = useState<NewsSourcesResponse | null>(null);
 
   // Filter state
   const [preferences, setPreferences] = useState<UserPreferences>(getDefaultPreferences());
@@ -320,13 +325,21 @@ export default function NewsPage() {
       const params = new URLSearchParams();
       params.set('limit', '100');
 
-      const response = await fetch(`${API_BASE}/api/news?${params}`);
-      if (!response.ok) throw new Error('Failed to fetch news');
+      const [newsResponse, sourcesResponse] = await Promise.all([
+        fetch(`${API_BASE}/api/news?${params}`),
+        fetch(`${API_BASE}/api/news/sources`)
+      ]);
 
-      const data: NewsResponse = await response.json();
-      setNews(data.items);
-      setLastUpdated(data.last_updated);
-      setSourcesChecked(data.sources_checked);
+      if (!newsResponse.ok) throw new Error('Failed to fetch news');
+
+      const data: NewsResponse = await newsResponse.json();
+      setNews(data.articles);
+      setTotalArticles(data.total);
+
+      if (sourcesResponse.ok) {
+        const sources = await sourcesResponse.json();
+        setSourcesInfo(sources);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load news');
     } finally {
@@ -404,7 +417,7 @@ export default function NewsPage() {
 
     const scored = filtered.map(item => {
       const { score, matchedTopics } = calculateTopicRelevance(item, activeTopics);
-      const baseRelevance = item.relevance_score || 0;
+      const baseRelevance = score; // Use calculated topic score as base relevance
       const topicBoost = score * 0.5;
       const readPenalty = preferences.readArticles.includes(item.id) ? -0.1 : 0;
 
@@ -421,14 +434,14 @@ export default function NewsPage() {
       switch (sortBy) {
         case 'latest':
           return items.sort((a, b) => {
-            const aDate = a.published_date ? new Date(a.published_date).getTime() : 0;
-            const bDate = b.published_date ? new Date(b.published_date).getTime() : 0;
+            const aDate = a.published_at ? new Date(a.published_at).getTime() : 0;
+            const bDate = b.published_at ? new Date(b.published_at).getTime() : 0;
             return bDate - aDate;
           });
         case 'oldest':
           return items.sort((a, b) => {
-            const aDate = a.published_date ? new Date(a.published_date).getTime() : 0;
-            const bDate = b.published_date ? new Date(b.published_date).getTime() : 0;
+            const aDate = a.published_at ? new Date(a.published_at).getTime() : 0;
+            const bDate = b.published_at ? new Date(b.published_at).getTime() : 0;
             return aDate - bDate;
           });
         case 'relevance':
@@ -447,10 +460,10 @@ export default function NewsPage() {
     } else if (activeView === 'trending' && sortBy === 'latest') {
       // Trending with latest sort: prioritize recent + high base relevance
       scored.sort((a, b) => {
-        const aDate = a.published_date ? new Date(a.published_date).getTime() : 0;
-        const bDate = b.published_date ? new Date(b.published_date).getTime() : 0;
+        const aDate = a.published_at ? new Date(a.published_at).getTime() : 0;
+        const bDate = b.published_at ? new Date(b.published_at).getTime() : 0;
         const recencyScore = (bDate - aDate) / (1000 * 60 * 60 * 24 * 7);
-        return (b.relevance_score + recencyScore * 0.1) - (a.relevance_score + recencyScore * 0.1);
+        return (b.personalScore + recencyScore * 0.1) - (a.personalScore + recencyScore * 0.1);
       });
     } else {
       // Apply standard sorting
@@ -571,10 +584,8 @@ export default function NewsPage() {
 
           {/* Meta info */}
           <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
-            {lastUpdated && (
-              <span>Updated: {new Date(lastUpdated).toLocaleString()}</span>
-            )}
-            <span>{sourcesChecked} sources</span>
+            <span>{totalArticles} articles</span>
+            {sourcesInfo && <span>{sourcesInfo.total} sources</span>}
             {preferences.role && (
               <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
                 {USER_ROLES.find(r => r.id === preferences.role)?.label}
@@ -860,11 +871,10 @@ function NewsCard({
   const [imageError, setImageError] = useState(false);
 
   // Use actual image if available, otherwise use category placeholder
+  const categoryLower = (item.category || 'default').toLowerCase();
   const imageUrl = (item.image_url && !imageError)
     ? item.image_url
-    : CATEGORY_PLACEHOLDERS[item.category] || CATEGORY_PLACEHOLDERS.default;
-
-  const hasValidImage = true; // Always show an image now (real or placeholder)
+    : CATEGORY_PLACEHOLDERS[categoryLower] || CATEGORY_PLACEHOLDERS.default;
 
   return (
     <a
@@ -879,7 +889,7 @@ function NewsCard({
       {/* Dismiss button */}
       <button
         onClick={(e) => onDismiss(item.id, e)}
-        className={`absolute ${hasValidImage ? 'top-2' : 'top-2'} right-2 p-1.5 bg-white/90 hover:bg-red-50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10`}
+        className="absolute top-2 right-2 p-1.5 bg-white/90 hover:bg-red-50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10"
         title="Not interested"
       >
         <ThumbsDown className="w-3.5 h-3.5 text-gray-400 hover:text-red-500" />
@@ -887,7 +897,7 @@ function NewsCard({
 
       {/* Match score indicator */}
       {matchPercent > 50 && (
-        <div className={`absolute ${hasValidImage ? 'top-2' : 'top-2'} left-2 bg-green-500 text-white text-xs font-medium px-2 py-0.5 rounded-full flex items-center gap-1 z-10`}>
+        <div className="absolute top-2 left-2 bg-green-500 text-white text-xs font-medium px-2 py-0.5 rounded-full flex items-center gap-1 z-10">
           <Sparkles className="w-3 h-3" />
           {matchPercent}% match
         </div>
@@ -903,11 +913,16 @@ function NewsCard({
         />
         {/* Gradient overlay for better text readability */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
-        {/* Category badge on image */}
-        <div className="absolute bottom-2 left-2">
-          <span className={`px-2 py-1 rounded text-xs font-medium bg-black/50 text-white backdrop-blur-sm`}>
+        {/* Category and Region badges on image */}
+        <div className="absolute bottom-2 left-2 flex items-center gap-2">
+          <span className="px-2 py-1 rounded text-xs font-medium bg-black/50 text-white backdrop-blur-sm">
             {item.category.charAt(0).toUpperCase() + item.category.slice(1)}
           </span>
+          {item.region && item.region !== 'Global' && (
+            <span className="px-2 py-1 rounded text-xs font-medium bg-blue-500/70 text-white backdrop-blur-sm">
+              {item.region}
+            </span>
+          )}
         </div>
       </div>
 
@@ -929,7 +944,7 @@ function NewsCard({
               );
             })}
           </div>
-          <span className="text-xs text-gray-500 whitespace-nowrap">{item.source}</span>
+          <span className="text-xs text-gray-500 whitespace-nowrap">{item.source_name}</span>
         </div>
 
         {/* Title */}
@@ -941,13 +956,13 @@ function NewsCard({
         </h3>
 
         {/* Description */}
-        <p className="text-sm text-gray-600 mb-3 line-clamp-3 flex-1">{item.description}</p>
+        <p className="text-sm text-gray-600 mb-3 line-clamp-3 flex-1">{item.summary || 'No description available'}</p>
 
         {/* Footer */}
         <div className="flex items-center justify-between pt-3 border-t border-gray-100">
           <div className="flex items-center text-xs text-gray-500">
             <Calendar className="w-3 h-3 mr-1" />
-            {formatDate(item.published_date)}
+            {formatDate(item.published_at)}
           </div>
           <div className="flex items-center gap-2">
             {/* Relevance stars */}
