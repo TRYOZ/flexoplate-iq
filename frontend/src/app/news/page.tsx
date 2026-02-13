@@ -66,6 +66,15 @@ interface UserPreferences {
 
 // ==================== CONSTANTS ====================
 
+// Placeholder images by category (using Unsplash source for reliable free images)
+const CATEGORY_PLACEHOLDERS: Record<string, string> = {
+  industry: 'https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=400&h=300&fit=crop', // Technology/Industry
+  packaging: 'https://images.unsplash.com/photo-1607166452427-7e4477079cb9?w=400&h=300&fit=crop', // Boxes/Packaging
+  labels: 'https://images.unsplash.com/photo-1586281380349-632531db7ed4?w=400&h=300&fit=crop', // Labels/Tags
+  converting: 'https://images.unsplash.com/photo-1565793298595-6a879b1d9492?w=400&h=300&fit=crop', // Manufacturing
+  default: 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400&h=300&fit=crop', // News/Print
+};
+
 // Topic tags with icons and keywords for matching
 const TOPIC_TAGS = [
   {
@@ -850,7 +859,12 @@ function NewsCard({
   const topicBadges = matchedTopics.slice(0, 2).map(t => TOPIC_TAGS.find(tag => tag.id === t)).filter(Boolean);
   const [imageError, setImageError] = useState(false);
 
-  const hasValidImage = item.image_url && !imageError;
+  // Use actual image if available, otherwise use category placeholder
+  const imageUrl = (item.image_url && !imageError)
+    ? item.image_url
+    : CATEGORY_PLACEHOLDERS[item.category] || CATEGORY_PLACEHOLDERS.default;
+
+  const hasValidImage = true; // Always show an image now (real or placeholder)
 
   return (
     <a
@@ -879,26 +893,23 @@ function NewsCard({
         </div>
       )}
 
-      {/* Article Image */}
-      {hasValidImage ? (
-        <div className="relative h-40 bg-gray-100 overflow-hidden">
-          <img
-            src={item.image_url!}
-            alt={item.title}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-            onError={() => setImageError(true)}
-          />
-          {/* Gradient overlay for better text readability */}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent" />
+      {/* Article Image - always shown (real image or placeholder) */}
+      <div className="relative h-40 bg-gray-100 overflow-hidden">
+        <img
+          src={imageUrl}
+          alt={item.title}
+          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+          onError={() => setImageError(true)}
+        />
+        {/* Gradient overlay for better text readability */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
+        {/* Category badge on image */}
+        <div className="absolute bottom-2 left-2">
+          <span className={`px-2 py-1 rounded text-xs font-medium bg-black/50 text-white backdrop-blur-sm`}>
+            {item.category.charAt(0).toUpperCase() + item.category.slice(1)}
+          </span>
         </div>
-      ) : (
-        /* Color bar fallback when no image */
-        <div className={`h-2 ${
-          topicBadges[0]
-            ? topicBadges[0].color.split(' ')[0]
-            : 'bg-gradient-to-r from-blue-500 to-purple-500'
-        }`} />
-      )}
+      </div>
 
       <div className="p-4 flex-1 flex flex-col">
         {/* Topic badges and source */}
