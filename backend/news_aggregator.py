@@ -220,30 +220,56 @@ async def fetch_og_image(client: httpx.AsyncClient, url: str) -> Optional[str]:
     """Fetch Open Graph image from article URL"""
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         }
-        response = await client.get(url, timeout=5.0, headers=headers, follow_redirects=True)
+
+        # Google News URLs need special handling - they redirect to the actual article
+        # Try to follow redirects to get the final URL
+        response = await client.get(url, timeout=8.0, headers=headers, follow_redirects=True)
+
         if response.status_code != 200:
+            print(f"[News] OG fetch failed for {url[:50]}: HTTP {response.status_code}")
             return None
 
-        html = response.text[:50000]  # Only check first 50KB
+        html = response.text[:100000]  # Check first 100KB
 
-        # Look for og:image meta tag
+        # Look for og:image meta tag - try multiple patterns
         og_patterns = [
             r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
             r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
             r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
+            r'<meta[^>]+property=["\']og:image:url["\'][^>]+content=["\']([^"\']+)["\']',
+            # Also try to find large images in the page
+            r'<img[^>]+src=["\']([^"\']+)["\'][^>]+class=["\'][^"\']*(?:featured|hero|main|article)[^"\']*["\']',
         ]
 
         for pattern in og_patterns:
             match = re.search(pattern, html, re.IGNORECASE)
             if match:
                 img_url = match.group(1)
-                if img_url and not img_url.startswith('data:'):
-                    return img_url
+                # Skip invalid URLs
+                if not img_url or img_url.startswith('data:'):
+                    continue
+                # Skip tiny images (likely icons/logos)
+                if '1x1' in img_url or 'pixel' in img_url or 'logo' in img_url.lower():
+                    continue
+                # Make relative URLs absolute
+                if img_url.startswith('//'):
+                    img_url = 'https:' + img_url
+                elif img_url.startswith('/'):
+                    # Get base URL from response
+                    from urllib.parse import urlparse
+                    parsed = urlparse(str(response.url))
+                    img_url = f"{parsed.scheme}://{parsed.netloc}{img_url}"
 
-    except Exception:
-        pass
+                return img_url
+
+    except httpx.TimeoutException:
+        print(f"[News] OG fetch timeout for {url[:50]}")
+    except Exception as e:
+        print(f"[News] OG fetch error for {url[:50]}: {type(e).__name__}")
 
     return None
 
@@ -554,17 +580,21 @@ async def fetch_all_feeds() -> List[NewsItem]:
 
         print(f"[News] Fetched {len(all_items)} items from {successful_feeds} successful feeds")
 
-        # Fetch OG images for items without images (limit to first 20 to avoid slowdown)
-        items_needing_images = [item for item in all_items if not item.get("image_url")][:20]
+        # Fetch OG images for items without images (limit to first 50 to balance speed/coverage)
+        items_needing_images = [item for item in all_items if not item.get("image_url")][:50]
         if items_needing_images:
             print(f"[News] Fetching OG images for {len(items_needing_images)} items...")
             og_tasks = [fetch_og_image(client, item["url"]) for item in items_needing_images]
             og_results = await asyncio.gather(*og_tasks, return_exceptions=True)
 
+            og_found = 0
             for item, og_image in zip(items_needing_images, og_results):
                 if isinstance(og_image, str) and og_image:
                     item["image_url"] = og_image
+                    og_found += 1
                     print(f"[News] OG image found for '{item['title'][:30]}...'")
+
+            print(f"[News] OG image fetch complete: {og_found}/{len(items_needing_images)} found")
 
     # Process and score items
     news_items = []
