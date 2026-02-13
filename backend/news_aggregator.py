@@ -216,6 +216,38 @@ def extract_image_from_html(html_content: str) -> Optional[str]:
     return None
 
 
+async def fetch_og_image(client: httpx.AsyncClient, url: str) -> Optional[str]:
+    """Fetch Open Graph image from article URL"""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        response = await client.get(url, timeout=5.0, headers=headers, follow_redirects=True)
+        if response.status_code != 200:
+            return None
+
+        html = response.text[:50000]  # Only check first 50KB
+
+        # Look for og:image meta tag
+        og_patterns = [
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+            r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
+        ]
+
+        for pattern in og_patterns:
+            match = re.search(pattern, html, re.IGNORECASE)
+            if match:
+                img_url = match.group(1)
+                if img_url and not img_url.startswith('data:'):
+                    return img_url
+
+    except Exception:
+        pass
+
+    return None
+
+
 def calculate_relevance(title: str, description: str) -> float:
     """Calculate relevance score based on flexo keywords"""
     text = f"{title} {description}".lower()
@@ -521,6 +553,18 @@ async def fetch_all_feeds() -> List[NewsItem]:
                 print(f"[News] Feed exception: {result}")
 
         print(f"[News] Fetched {len(all_items)} items from {successful_feeds} successful feeds")
+
+        # Fetch OG images for items without images (limit to first 20 to avoid slowdown)
+        items_needing_images = [item for item in all_items if not item.get("image_url")][:20]
+        if items_needing_images:
+            print(f"[News] Fetching OG images for {len(items_needing_images)} items...")
+            og_tasks = [fetch_og_image(client, item["url"]) for item in items_needing_images]
+            og_results = await asyncio.gather(*og_tasks, return_exceptions=True)
+
+            for item, og_image in zip(items_needing_images, og_results):
+                if isinstance(og_image, str) and og_image:
+                    item["image_url"] = og_image
+                    print(f"[News] OG image found for '{item['title'][:30]}...'")
 
     # Process and score items
     news_items = []
