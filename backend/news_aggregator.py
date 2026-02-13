@@ -173,6 +173,33 @@ def clean_html(text: str) -> str:
     return clean[:500]  # Limit description length
 
 
+def extract_image_from_html(html_content: str) -> Optional[str]:
+    """Extract image URL from HTML content (description field often contains images)"""
+    if not html_content:
+        return None
+
+    # Try to find img tags
+    img_patterns = [
+        r'<img[^>]+src=["\']([^"\']+)["\']',
+        r'<img[^>]+src=([^\s>]+)',
+        r'<media:thumbnail[^>]+url=["\']([^"\']+)["\']',
+        r'<enclosure[^>]+url=["\']([^"\']+)["\'][^>]+type=["\']image',
+    ]
+
+    for pattern in img_patterns:
+        match = re.search(pattern, html_content, re.IGNORECASE)
+        if match:
+            img_url = match.group(1)
+            # Validate it looks like an image URL
+            if any(ext in img_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', 'image']):
+                return img_url
+            # Also accept URLs that look like image endpoints
+            if 'img' in img_url.lower() or 'image' in img_url.lower() or 'photo' in img_url.lower():
+                return img_url
+
+    return None
+
+
 def calculate_relevance(title: str, description: str) -> float:
     """Calculate relevance score based on flexo keywords"""
     text = f"{title} {description}".lower()
@@ -258,18 +285,45 @@ async def fetch_feed(client: httpx.AsyncClient, feed: dict) -> List[dict]:
                 link = item.findtext('link', '')
                 pub_date = item.findtext('pubDate', '')
 
-                # Try to get image
+                # Try multiple methods to get image
                 image_url = None
+
+                # Method 1: media:content tag
                 media_content = item.find('media:content', namespaces)
                 if media_content is not None:
                     image_url = media_content.get('url')
 
-                # Also check enclosure
-                enclosure = item.find('enclosure')
-                if enclosure is not None and not image_url:
-                    enc_type = enclosure.get('type', '')
-                    if 'image' in enc_type:
-                        image_url = enclosure.get('url')
+                # Method 2: media:thumbnail tag
+                if not image_url:
+                    media_thumb = item.find('media:thumbnail', namespaces)
+                    if media_thumb is not None:
+                        image_url = media_thumb.get('url')
+
+                # Method 3: enclosure tag with image type
+                if not image_url:
+                    enclosure = item.find('enclosure')
+                    if enclosure is not None:
+                        enc_type = enclosure.get('type', '')
+                        if 'image' in enc_type:
+                            image_url = enclosure.get('url')
+
+                # Method 4: image tag (some feeds have this)
+                if not image_url:
+                    image_elem = item.find('image')
+                    if image_elem is not None:
+                        image_url = image_elem.findtext('url') or image_elem.get('url')
+
+                # Method 5: Extract from description HTML (common in Google News)
+                if not image_url:
+                    # Get raw description with HTML
+                    raw_desc = item.findtext('description', '')
+                    image_url = extract_image_from_html(raw_desc)
+
+                # Method 6: content:encoded field (WordPress feeds)
+                if not image_url:
+                    content_encoded = item.findtext('content:encoded', '', namespaces)
+                    if content_encoded:
+                        image_url = extract_image_from_html(content_encoded)
 
                 if title and link:
                     items.append({
@@ -294,6 +348,29 @@ async def fetch_feed(client: httpx.AsyncClient, feed: dict) -> List[dict]:
 
                 updated = entry.findtext('atom:updated', '', namespaces) or entry.findtext('updated', '')
 
+                # Try to extract image from Atom entry
+                image_url = None
+
+                # Method 1: media:thumbnail
+                media_thumb = entry.find('media:thumbnail', namespaces)
+                if media_thumb is not None:
+                    image_url = media_thumb.get('url')
+
+                # Method 2: media:content
+                if not image_url:
+                    media_content = entry.find('media:content', namespaces)
+                    if media_content is not None:
+                        image_url = media_content.get('url')
+
+                # Method 3: Extract from summary/content HTML
+                if not image_url:
+                    raw_summary = entry.findtext('atom:summary', '', namespaces) or entry.findtext('summary', '')
+                    image_url = extract_image_from_html(raw_summary)
+
+                if not image_url:
+                    content = entry.findtext('atom:content', '', namespaces) or entry.findtext('content', '')
+                    image_url = extract_image_from_html(content)
+
                 if title and link:
                     items.append({
                         "title": clean_html(title),
@@ -303,7 +380,7 @@ async def fetch_feed(client: httpx.AsyncClient, feed: dict) -> List[dict]:
                         "source_url": feed["url"].split('/feed')[0],
                         "category": feed["category"],
                         "published_date": updated,
-                        "image_url": None
+                        "image_url": image_url
                     })
 
     except ET.ParseError as e:
