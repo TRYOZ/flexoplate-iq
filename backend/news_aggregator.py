@@ -178,23 +178,39 @@ def extract_image_from_html(html_content: str) -> Optional[str]:
     if not html_content:
         return None
 
-    # Try to find img tags
+    # First, decode HTML entities (Google News often has &lt;img&gt; instead of <img>)
+    decoded = html_content
+    decoded = decoded.replace('&lt;', '<')
+    decoded = decoded.replace('&gt;', '>')
+    decoded = decoded.replace('&quot;', '"')
+    decoded = decoded.replace('&amp;', '&')
+    decoded = decoded.replace('&#39;', "'")
+
+    # Try to find img tags with various patterns
     img_patterns = [
         r'<img[^>]+src=["\']([^"\']+)["\']',
         r'<img[^>]+src=([^\s>]+)',
+        r'src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp))["\']',
+        r'(https?://[^\s"\'<>]+\.(?:jpg|jpeg|png|gif|webp))',
         r'<media:thumbnail[^>]+url=["\']([^"\']+)["\']',
         r'<enclosure[^>]+url=["\']([^"\']+)["\'][^>]+type=["\']image',
     ]
 
     for pattern in img_patterns:
-        match = re.search(pattern, html_content, re.IGNORECASE)
+        match = re.search(pattern, decoded, re.IGNORECASE)
         if match:
             img_url = match.group(1)
-            # Validate it looks like an image URL
-            if any(ext in img_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', 'image']):
+            # Skip tiny tracking pixels and icons
+            if 'pixel' in img_url.lower() or '1x1' in img_url or 'tracking' in img_url.lower():
+                continue
+            # Skip data URIs
+            if img_url.startswith('data:'):
+                continue
+            # Validate it looks like a real image URL
+            if any(ext in img_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
                 return img_url
             # Also accept URLs that look like image endpoints
-            if 'img' in img_url.lower() or 'image' in img_url.lower() or 'photo' in img_url.lower():
+            if any(term in img_url.lower() for term in ['img', 'image', 'photo', 'thumb', 'media', 'cdn']):
                 return img_url
 
     return None
@@ -324,6 +340,18 @@ async def fetch_feed(client: httpx.AsyncClient, feed: dict) -> List[dict]:
                     content_encoded = item.findtext('content:encoded', '', namespaces)
                     if content_encoded:
                         image_url = extract_image_from_html(content_encoded)
+
+                # Method 7: Try to get from source element (Google News specific)
+                if not image_url:
+                    source_elem = item.find('source')
+                    if source_elem is not None:
+                        source_url = source_elem.get('url')
+                        if source_url:
+                            image_url = extract_image_from_html(source_url)
+
+                # Debug: Log when we find images
+                if image_url:
+                    print(f"[News] Found image for '{title[:30]}...': {image_url[:50]}...")
 
                 if title and link:
                     items.append({
